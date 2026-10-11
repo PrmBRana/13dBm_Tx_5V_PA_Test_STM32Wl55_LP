@@ -632,13 +632,19 @@ class SDRSocketServer:
 # GUI INTERFACE (TKINTER LIGHT THEME)
 # ============================================================================
 
-def run_gui(default_port=None, baudrate=115200):
+PA_SETTINGS = {
+    "HP": (b"PA HP\r\n", b"PWR 22\r\n"),
+    "LP": (b"PA LP\r\n", b"PWR 14\r\n"),
+}
+
+
+def run_gui(default_port=None, baudrate=115200, pa="HP"):
     try:
         import tkinter as tk
         from tkinter import ttk, scrolledtext, messagebox, filedialog
     except ImportError:
         print("[WARN] Tkinter not available. Falling back to CLI mode.")
-        run_cli(default_port, baudrate)
+        run_cli(default_port, baudrate, pa)
         return
 
     root = tk.Tk()
@@ -1310,6 +1316,11 @@ def run_gui(default_port=None, baudrate=115200):
     baud_var = tk.StringVar(value=str(baudrate))
     ttk.Combobox(conn_bar, textvariable=baud_var, width=8,
                  values=["9600", "57600", "115200", "230400"]).pack(side=tk.LEFT)
+
+    ttk.Label(conn_bar, text="Uplink PA:").pack(side=tk.LEFT, padx=(12, 4))
+    pa_var = tk.StringVar(value=pa)
+    ttk.Combobox(conn_bar, textvariable=pa_var, width=4, state="readonly",
+                 values=list(PA_SETTINGS.keys())).pack(side=tk.LEFT)
 
     btn_connect = ttk.Button(conn_bar, text="Connect",
                              style="Primary.TButton", width=12)
@@ -3087,15 +3098,18 @@ def run_gui(default_port=None, baudrate=115200):
                     f"RF: ACTIVE | Packets: 0 | ACKs: 0")
                 reset_ack_banner()
 
-                # Automatically configure Ground Station hardware to +22 dBm HP RFO
+                # HP = RFO_HP +22 dBm, LP = RFO_LP +14 dBm; which one reaches the
+                # antenna depends on the ground-station board.
+                pa_cmd, pwr_cmd = PA_SETTINGS[pa_var.get()]
+
                 def init_gs_link():
                     time.sleep(0.2)
                     if ser and ser.is_open:
                         try:
-                            ser.write(b"PA HP\r\n")
+                            ser.write(pa_cmd)
                             ser.flush()
                             time.sleep(0.05)
-                            ser.write(b"PWR 22\r\n")
+                            ser.write(pwr_cmd)
                             ser.flush()
                             time.sleep(0.05)
                             ser.write(b"S\r\n")
@@ -3145,7 +3159,7 @@ def run_gui(default_port=None, baudrate=115200):
 # CLI MODE FALLBACK
 # ============================================================================
 
-def run_cli(port=None, baudrate=115200):
+def run_cli(port=None, baudrate=115200, pa="HP"):
     if not port:
         all_p = [p.device for p in serial.tools.list_ports.comports()]
         usb_ports = [p for p in all_p if "ttyUSB" in p or "ttyACM" in p]
@@ -3169,10 +3183,11 @@ def run_cli(port=None, baudrate=115200):
 
     try:
         time.sleep(0.15)
-        ser.write(b"PA HP\r\n")
+        pa_cmd, pwr_cmd = PA_SETTINGS[pa]
+        ser.write(pa_cmd)
         ser.flush()
         time.sleep(0.05)
-        ser.write(b"PWR 22\r\n")
+        ser.write(pwr_cmd)
         ser.flush()
         time.sleep(0.05)
         ser.write(b"S\r\n")
@@ -3243,9 +3258,11 @@ if __name__ == "__main__":
     ap.add_argument("-b", "--baud", type=int, default=115200)
     ap.add_argument("--cli", action="store_true",
                     help="Force command-line interface mode")
+    ap.add_argument("--pa", choices=list(PA_SETTINGS.keys()), default="HP",
+                    help="Uplink PA path: HP = RFO_HP +22 dBm, LP = RFO_LP +14 dBm")
     a = ap.parse_args()
 
     if a.cli or not (os.environ.get("DISPLAY") or sys.platform in ("win32", "darwin")):
-        run_cli(a.port, a.baud)
+        run_cli(a.port, a.baud, a.pa)
     else:
-        run_gui(a.port, a.baud)
+        run_gui(a.port, a.baud, a.pa)
