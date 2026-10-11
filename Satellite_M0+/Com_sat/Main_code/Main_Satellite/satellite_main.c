@@ -278,14 +278,66 @@ static bool Sat_Try_Parse_Ascii_Hex_Command(const uint8_t *pl, uint16_t plen, ui
     return false;
 }
 
-static bool Sat_Validate_Frame(uint8_t *f, uint16_t len, const char **why)
+/* FCS check. HDLC destuff can leave one extra byte before the closing flag;
+ * if the FCS only matches without it, drop it from the frame. */
+static bool Sat_Frame_Crc_Ok(uint8_t *f, uint16_t *len)
 {
+    if (AX25_VerifyCRC_Method1(f, *len) || AX25_VerifyCRC_Method2(f, *len, NULL, NULL, NULL)) {
+        return true;
+    }
+    if (*len > 19) {
+        uint16_t n = (uint16_t)(*len - 1);
+        uint8_t saved = f[n - 1];
+        f[n - 1] = AX25_FLAG;
+        if (AX25_VerifyCRC_Method1(f, n) || AX25_VerifyCRC_Method2(f, n, NULL, NULL, NULL)) {
+            *len = n;
+            return true;
+        }
+        f[n - 1] = saved;
+    }
+    return false;
+}
+
+static bool Sat_Validate_Frame(uint8_t *f, uint16_t *plen_io, const char **why)
+{
+    uint16_t len = *plen_io;
     if (len < 19) { *why = "too short for AX.25 frame (<19B)"; return false; }
 
     if (f[0] != AX25_FLAG || f[len - 1] != AX25_FLAG) {
         *why = "missing 0x7E start/end flag";
         return false;
     }
+
+    /* Never act on a frame whose FCS does not match: a bit error inside the
+     * command bytes would otherwise execute a wrong command. */
+    if (!Sat_Frame_Crc_Ok(f, &len)) {
+        uint8_t test_f[AX25_MAX_FRAME_SIZE];
+        bool repaired = false;
+        if (len <= sizeof(test_f)) {
+            memcpy(test_f, f, len);
+            test_f[8]  = 'G' << 1;
+            test_f[9]  = 'R' << 1;
+            test_f[10] = 'O' << 1;
+            test_f[11] = 'U' << 1;
+            test_f[12] = 'N' << 1;
+            test_f[13] = 'D' << 1;
+            test_f[14] = 0x61;
+            test_f[15] = 0x03;
+            test_f[16] = 0xF0;
+            uint16_t tlen = len;
+            if (Sat_Frame_Crc_Ok(test_f, &tlen)) {
+                memcpy(f, test_f, tlen);
+                len = tlen;
+                repaired = true;
+                uart1_puts(" [VALIDATE-REPAIR] Recovered frame with clean FCS!\r\n");
+            }
+        }
+        if (!repaired) {
+            *why = "CRC/FCS error (frame corrupted on air)";
+            return false;
+        }
+    }
+    *plen_io = len;
 
     /* 1. Command-Centric Validation (ANY Radio / ANY GS):
      * If the frame contains a valid 0x53 CubeSat Telecommand (13-byte or 8-byte),
@@ -325,34 +377,12 @@ static bool Sat_Validate_Frame(uint8_t *f, uint16_t len, const char **why)
         }
     }
 
-    /* 2. Standard clean AX.25 UI frame with valid CRC (Method 1 residue or Method 2 computed) */
-    if (f[15] == 0x03 && f[16] == 0xF0 &&
-        (AX25_VerifyCRC_Method1(f, len) || AX25_VerifyCRC_Method2(f, len, NULL, NULL, NULL))) {
+    /* 2. Standard AX.25 UI frame (FCS already verified above) */
+    if (f[15] == 0x03 && f[16] == 0xF0) {
         return true;
     }
 
-    /* 3. Resilient repair path for weak RF signals */
-    uint8_t test_f[AX25_MAX_FRAME_SIZE];
-    if (len <= sizeof(test_f)) {
-        memcpy(test_f, f, len);
-        test_f[8]  = 'G' << 1;
-        test_f[9]  = 'R' << 1;
-        test_f[10] = 'O' << 1;
-        test_f[11] = 'U' << 1;
-        test_f[12] = 'N' << 1;
-        test_f[13] = 'D' << 1;
-        test_f[14] = 0x61;
-        test_f[15] = 0x03;
-        test_f[16] = 0xF0;
-
-        if (AX25_VerifyCRC_Method1(test_f, len) || AX25_VerifyCRC_Method2(test_f, len, NULL, NULL, NULL)) {
-            memcpy(f, test_f, len);
-            uart1_puts(" [VALIDATE-REPAIR] Recovered frame with clean FCS!\r\n");
-            return true;
-        }
-    }
-
-    *why = "CRC/FCS error or invalid control/PID (not AX.25 UI)";
+    *why = "invalid control/PID (not AX.25 UI)";
     return false;
 }
 
@@ -788,7 +818,7 @@ int main(void) {
                      * ------------------------------------------------------------- */
                     uart1_puts(">>> [STEP 3: VALIDATE AX.25] Check Headers, Callsigns & FCS/CRC <<<\r\n");
                     const char *why_invalid = "unknown";
-                    if (!Sat_Validate_Frame(s_rx_decoded, decoded_len, &why_invalid)) {
+                    if (!Sat_Validate_Frame(s_rx_decoded, &decoded_len, &why_invalid)) {
                         uart1_printf(" [VALIDATE FAILED] Frame rejected: %s\r\n", why_invalid);
                         RadioApp_StartRx();
                         break;

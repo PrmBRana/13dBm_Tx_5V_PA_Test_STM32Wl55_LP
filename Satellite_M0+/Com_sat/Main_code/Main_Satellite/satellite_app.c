@@ -886,7 +886,7 @@ void Satellite_GMSK_Prepare(void) {
     CPU2_Delay_Ms(40);
 
     SUBGRF_SetPacketType(PACKET_TYPE_GFSK);
-    RadioApp_SetTxPower(10); /* keep 10 dBm for whole 5V PA session (14 dBm brown-outs) */
+    RadioApp_SetTxPower(14); /* keep 10 dBm for whole 5V PA session (14 dBm brown-outs) */
     RadioApp_SetPaSelect(pa_sel);
 }
 
