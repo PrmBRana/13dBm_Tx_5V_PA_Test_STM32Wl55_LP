@@ -276,12 +276,9 @@ void RadioApp_ForceOpenGfskParams(void)
     packetParams.PacketType =
         PACKET_TYPE_GFSK;
 
-    /* Uplink RX: the GS sends preamble + sync 93 0B 51 DE before the G3RUH
-     * payload. Requiring the sync stops noise from starting a 200 B capture
-     * that blocks the real packet, and aligns the FIFO to payload byte 0. */
-    static uint8_t s_uplink_sync[8] = RADIO_DOWNLINK_SYNC_WORD;
-    SUBGRF_SetSyncWord(s_uplink_sync);
-
+    /* Uplink RX must match the firmware that already decoded GROUND commands:
+     * do not require HW sync 93 0B 51 DE (hardware sync RX stopped all uplink).
+     * Detect 16-bit 0101 preamble, take 200 B, then software G3RUH hunt for 0x7E. */
     packetParams.Params.Gfsk.PreambleLength =
         RADIO_PREAMBLE_LENGTH_BITS;
 
@@ -289,7 +286,7 @@ void RadioApp_ForceOpenGfskParams(void)
         RADIO_PREAMBLE_DETECTOR_16_BITS;
 
     packetParams.Params.Gfsk.SyncWordLength =
-        RADIO_DOWNLINK_SYNC_WORD_BITS;
+        0;
 
     packetParams.Params.Gfsk.AddrComp =
         RADIO_ADDRESSCOMP_FILT_OFF;
