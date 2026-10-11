@@ -857,8 +857,6 @@ bool Satellite_Run_CW_Session_Ex(uint32_t cycle,
  */
 
 void Satellite_GMSK_Prepare(void) {
-    int8_t power = (s_config.txPowerDbm != 0) ? s_config.txPowerDbm : RADIO_TX_POWER_DBM;
-    if (power > 14) power = 14;
     uint8_t pa_sel = RFO_LP;
 
     const bool pa5v_already_on =
@@ -868,6 +866,7 @@ void Satellite_GMSK_Prepare(void) {
     /* Already biased for this downlink session: do not re-toggle switch/PA. */
     if (pa5v_already_on) {
         RBI_SetTxSwitchConfig(RBI_SWITCH_RFO_LP5V);
+        RadioApp_SetTxPower(RADIO_GMSK_TX_POWER_DBM);
         RadioApp_SetPaSelect(pa_sel);
         return;
     }
@@ -886,7 +885,7 @@ void Satellite_GMSK_Prepare(void) {
     CPU2_Delay_Ms(40);
 
     SUBGRF_SetPacketType(PACKET_TYPE_GFSK);
-    RadioApp_SetTxPower(14); /* 5V LP PA drive for the whole GMSK session; lower to 10-12 if the supply brown-outs (BOR) */
+    RadioApp_SetTxPower(RADIO_GMSK_TX_POWER_DBM);
     RadioApp_SetPaSelect(pa_sel);
 }
 
@@ -973,7 +972,7 @@ void Satellite_Run_GMSK_Burst_Session_Ex(uint32_t cycle,
     if (interval_ms == 0) interval_ms = 300;
     if (timeout_ms == 0) timeout_ms = (s_config.txTimeoutMs > 0) ? s_config.txTimeoutMs : 3000;
 
-    int8_t power = (s_config.txPowerDbm != 0) ? s_config.txPowerDbm : RADIO_TX_POWER_DBM;
+    int8_t power = RADIO_GMSK_TX_POWER_DBM;
     uint32_t bitrate = (s_config.bitrateBps > 0) ? s_config.bitrateBps : RADIO_BIT_RATE_BPS;
 
     uart1_puts("============================================================\r\n");
@@ -1714,7 +1713,6 @@ void Satellite_Send_Ack_Accepted(uint8_t mission_id)
                  ack_payload[0], ack_payload[1], ack_payload[2], ack_payload[2], ack_pa_str);
     uart1_printf("[TX-HEX] hex(3):%02X%02X%02X\r\n", ack_payload[0], ack_payload[1], ack_payload[2]);
     Satellite_Send_Packet(ack_payload, sizeof(ack_payload));
-    /* Stay at 10 dBm for the following HK/data downlink. 14 dBm + 5V PA brown-outs. */
 }
 
 void Satellite_Send_Ack_Completed(uint8_t mission_id)

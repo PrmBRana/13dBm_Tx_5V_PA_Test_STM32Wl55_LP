@@ -47,20 +47,25 @@ extern "C" {
  * ============================================================
  */
 /*
- * RF Transmit Drive Power (dBm) on RFO_LP (PB2):
- *   - Set to 14 dBm for Full Flight / Power Amplifier Output:
- *       * 3.3V External PA (PC2): ~26 dBm output
- *       * 5V External PA (PC3 / PA0 Boost): ~27 to 28.5 dBm output
- *   - (Note: 9 dBm was previously used for current-limited ST-Link USB bench testing)
+ * CW Morse drive (dBm) on RFO_LP into the 3.3V PA (PC2).
+ * The 3.3V path is current-clamped (REG_OCP = 0x18). Do not use this value
+ * for GMSK: that path turns the 5V boost and 5V PA on.
  */
 #define RADIO_TX_POWER_DBM             14
 
 /*
- * SX126x RFO_LP paDutyCycle used when driving the 5V External PA (GMSK).
- * Must match the 3.3V PA and the 5V CW carrier test: 0x04 = full +14 dBm drive.
- * Previous 0x03 under-drove the 5V PA (~13 dBm), so GMSK looked weaker than CW.
+ * GMSK ACK and data downlink drive into the 5V PA (PC3 + PA0 boost).
+ * +14 dBm (duty 0x04) is about 27 dBm at the antenna and browns the board
+ * out as soon as a command starts the ACK. +10 dBm is the drive that stays
+ * up and still decodes.
+ */
+#define RADIO_GMSK_TX_POWER_DBM        10
+
+/*
+ * SX126x RFO_LP paDutyCycle used only if GMSK drive is raised back to +14 dBm.
+ * At RADIO_GMSK_TX_POWER_DBM (10) the driver selects duty 0x02 instead.
  * Keep the 5V PA biased for the whole GMSK burst (no PC3 off / PC2 on between
- * packets) so 0x04 does not cause inrush brownouts.
+ * packets) so a later power increase does not cause an inrush brownout.
  */
 #define RADIO_GMSK_5V_PA_DUTY          0x04
 
