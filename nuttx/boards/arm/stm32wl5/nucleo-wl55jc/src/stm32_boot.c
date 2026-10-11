@@ -258,6 +258,14 @@ static void stm32wl5_ensure_cpu2_boot_vector(void)
       up_udelay(10);
     }
 
+  /* Drop sticky option-byte errors. A set OPTVERR makes OPTSTRT a no-op,
+   * and launching OBL anyway resets forever with the old vector.
+   */
+
+  putreg32(FLASH_SR_OPTVERR | FLASH_SR_WRPERR | FLASH_SR_PROGERR |
+           FLASH_SR_OPERR | FLASH_SR_PGAERR | FLASH_SR_PGSERR |
+           FLASH_SR_SIZERR, STM32WL5_FLASH_SR);
+
   /* 2. Unlock Flash Control Register if locked */
 
   if (getreg32(STM32WL5_FLASH_CR) & FLASH_CR_LOCK)
@@ -274,7 +282,9 @@ static void stm32wl5_ensure_cpu2_boot_vector(void)
       putreg32(0x4C5D6E7FUL, STM32WL5_FLASH_OPTKEYR);
     }
 
-  /* 4. Write new CPU2 boot vector into FLASH_SRRVR */
+  /* 4. Write new CPU2 boot vector into FLASH_SRRVR.
+   *    Only C2OPT and SBRV change. nBOOT0 / RDP in FLASH_OPTR stay as they are.
+   */
 
   modifyreg32(STM32WL5_FLASH_SRRVR, 0x8000FFFFUL, target_srrvr);
 
@@ -289,6 +299,18 @@ static void stm32wl5_ensure_cpu2_boot_vector(void)
       up_udelay(10);
     }
 
+  srrvr = getreg32(STM32WL5_FLASH_SR);
+  if ((srrvr & (FLASH_SR_OPTVERR | FLASH_SR_WRPERR | FLASH_SR_PROGERR |
+                FLASH_SR_OPERR)) != 0 ||
+      (getreg32(STM32WL5_FLASH_SRRVR) & 0x8000FFFFUL) != target_srrvr)
+    {
+      printf("[SYSTEM] [AUTO-CONFIG] Option byte write failed (SR=0x%08lx). "
+             "M4 continues without reset.\n",
+             (unsigned long)srrvr);
+      fflush(stdout);
+      return;
+    }
+
   printf("[SYSTEM] [AUTO-CONFIG] Option Bytes programmed! Reloading OBL (resetting system)...\n");
   fflush(stdout);
   up_mdelay(100);
@@ -297,12 +319,42 @@ static void stm32wl5_ensure_cpu2_boot_vector(void)
 
   modifyreg32(STM32WL5_FLASH_CR, 0, FLASH_CR_OBL_LAUNCH);
 
-  /* Wait for reset to occur */
+  /* If the reload does not reset the chip, do not spin here. A stuck
+   * loop at this point looks like "M4 NuttX does nothing" after flash.
+   */
 
-  for (;;)
+  up_mdelay(500);
+  printf("[SYSTEM] [AUTO-CONFIG] OBL reload did not reset. Continuing boot.\n");
+  fflush(stdout);
+}
+
+static bool stm32wl5_cpu2_image_present(void)
+{
+  const uint32_t sp    = getreg32(0x08032000);
+  const uint32_t reset = getreg32(0x08032004);
+
+  /* Blank CPU2 pages are 0xFFFFFFFF. Booting that image locks the bus
+   * and the M4 never reaches the shell.
+   */
+
+  if (sp == 0xffffffffu || reset == 0xffffffffu)
     {
-      __asm__ volatile ("nop");
+      return false;
     }
+
+  /* Stack must point at SRAM1/SRAM2, reset at the CPU2 flash window, Thumb. */
+
+  if ((sp & 0xfffe0000u) != 0x20000000u)
+    {
+      return false;
+    }
+
+  if ((reset & 1u) == 0u || reset < 0x08032000u || reset >= 0x08040000u)
+    {
+      return false;
+    }
+
+  return true;
 }
 #endif
 
@@ -406,10 +458,19 @@ void board_late_initialize(void)
   modifyreg32(0x58000150, 0, (1 << 20) | (1 << 25) | (1 << 19)); /* C2AHB3ENR: IPCCEN | FLASHEN | HSEMEN */
   modifyreg32(0x5800014c, 0, (1 << 0) | (1 << 1) | (1 << 2));   /* C2AHB2ENR: GPIOA/B/C */
 
-  printf("[SYSTEM] Booting Cortex-M0+ (CPU2) at 0x08032000 (M4: 200KB, M0+: 56KB)...\n");
-  fflush(stdout);
-  up_mdelay(10);
-  stm32wl5_pwr_boot_c2();
+  if (!stm32wl5_cpu2_image_present())
+    {
+      printf("[SYSTEM] CPU2 flash at 0x08032000 is empty or invalid. "
+             "M4 continues, CPU2 not started.\n");
+      fflush(stdout);
+    }
+  else
+    {
+      printf("[SYSTEM] Booting Cortex-M0+ (CPU2) at 0x08032000 (M4: 200KB, M0+: 56KB)...\n");
+      fflush(stdout);
+      up_mdelay(10);
+      stm32wl5_pwr_boot_c2();
+    }
 
   /* Perform immediate initial IPCC Handshake with Cortex-M0+ */
   modifyreg32(0x58000050, 0, (1 << 20)); /* RCC_AHB3ENR: ensure IPCC clock enabled on M4 */

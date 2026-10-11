@@ -6,6 +6,12 @@ build/
 *.map
 *.swp
 .DS_Store
+__pycache__/
+*.pyc
+
+# Separate GitHub repos, kept locally for reference only
+Ground_Station/old_reference/
+Satellite_M0+/Com_sat/old_code_reference/
 
 
 

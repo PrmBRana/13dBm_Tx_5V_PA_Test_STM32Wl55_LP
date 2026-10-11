@@ -121,9 +121,11 @@ int launcher_main(int argc, char *argv[])
       printf("[LAUNCHER] [IPC] WARNING: Cortex-M0+ handshake timeout (proceeding with OBC bring-up).\n");
     }
 
-  /* 3. Launch OBC Main Sensor Acquisition Task (Stack: 1536 Bytes) */
+  /* 3. Launch OBC Main Sensor Acquisition Task */
   printf("[LAUNCHER] Spawning OBC Main sensor acquisition task...\n");
-  obc_pid = task_create("obc_main", 100, 1536, obc_main_main, NULL);
+  obc_pid = task_create("obc_main", CONFIG_EXAMPLES_OBC_MAIN_PRIORITY,
+                        CONFIG_EXAMPLES_OBC_MAIN_STACKSIZE,
+                        obc_main_main, NULL);
   if (obc_pid < 0)
     {
       printf("[LAUNCHER] ERROR: Failed to start OBC Main task (ret: %d, errno: %d)\n", obc_pid, errno);
@@ -133,9 +135,9 @@ int launcher_main(int argc, char *argv[])
       printf("[LAUNCHER] OBC Main task running (PID: %d)\n", obc_pid);
     }
 
-  /* 3. Launch LittleFS Telemetry Storage Task (Stack: 2048 Bytes) */
+  /* 3. Launch LittleFS Telemetry Storage Task (Stack: 3072 Bytes) */
   printf("[LAUNCHER] Spawning LittleFS storage daemon...\n");
-  littlefs_pid = task_create("littlefs", 100, 2048, littlefs_main, NULL);
+  littlefs_pid = task_create("littlefs", 100, 3072, littlefs_main, NULL);
   if (littlefs_pid < 0)
     {
       printf("[LAUNCHER] ERROR: Failed to start LittleFS daemon (ret: %d, errno: %d)\n", littlefs_pid, errno);

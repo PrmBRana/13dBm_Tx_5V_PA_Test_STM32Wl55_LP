@@ -41,7 +41,15 @@ build_all: build_sat_m0 build_gs build_m4
 	@echo "    make flash_GS    -> Flash Ground Station M0+   (0x08032000)"
 	@echo "================================================================="
 
-build_m4:
+M4_CONFIG    ?= nucleo-wl55jc:nsh
+
+configure_m4:
+	cd $(M4_DIR) && ./tools/configure.sh -l $(M4_CONFIG)
+
+$(M4_DIR)/.config:
+	cd $(M4_DIR) && ./tools/configure.sh -l $(M4_CONFIG)
+
+build_m4: $(M4_DIR)/.config
 	@echo ">>> Building JC1/JC2 Cortex-M4 (NuttX - shared for both boards)..."
 	$(MAKE) -C $(M4_DIR)
 
@@ -59,7 +67,7 @@ build_gs:
 # This writes ONLY to sectors 0-99 (200 KB max).
 # CPU2 at 0x08032000 (sectors 100-127) is strictly preserved!
 # ==========================================================================
-flash_M4 flash_m4 flash_cpu1 flash_CPU1:
+flash_M4 flash_m4 flash_cpu1 flash_CPU1: $(M4_DIR)/.config
 	@if [ ! -f $(M4_DIR)/nuttx.bin ]; then \
 	  echo "$(M4_DIR)/nuttx.bin not found. Building NuttX..."; \
 	  $(MAKE) -C $(M4_DIR); \
@@ -114,4 +122,4 @@ clean_m0:
 	$(MAKE) -C $(SAT_CPU2_DIR) clean
 	$(MAKE) -C $(GS_CPU2_DIR) clean
 
-.PHONY: all build_all build_m4 build_sat_m0 build_gs flash_M4 flash_m4 flash_cpu1 flash_CPU1 flashsatM0 flash_sat_m0 flash_sat flash_SAT flash_m0 flash_M0 flash_GS flash_gs flash_cpu2_gs flash_all_sat clean clean_m0
+.PHONY: all build_all configure_m4 build_m4 build_sat_m0 build_gs flash_M4 flash_m4 flash_cpu1 flash_CPU1 flashsatM0 flash_sat_m0 flash_sat flash_SAT flash_m0 flash_M0 flash_GS flash_gs flash_cpu2_gs flash_all_sat clean clean_m0

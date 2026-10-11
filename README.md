@@ -262,101 +262,103 @@ The same codebase can be compiled into dedicated Ground Station firmware (`gs_m0
 ## 9. Build and Flash Guide
 
 ### Prerequisites
-- ARM GNU Toolchain (`arm-none-eabi-gcc`)
+- ARM GNU Toolchain (`arm-none-eabi-gcc`), `make`, `kconfig-frontends` (for `configure.sh`)
 - STMicroelectronics `STM32_Programmer_CLI` (or OpenOCD)
+- Internet access on the first M4 build (NuttX downloads the LittleFS sources)
 
-### Building the Binaries
-
-```bash
-# 1. Build CPU1 Cortex-M4 (NuttX OBC)
-cd /home/prem/Desktop/nuttxspace/nuttx
-make -j4
-# Produces: nuttx/nuttx.bin (117 KB)
-
-# 2. Build CPU2 Cortex-M0+ Satellite Flight Firmware
-cd /home/prem/Desktop/nuttxspace/nuttx/boards/arm/stm32wl5/nucleo-wl55jc/CPU2
-make APP=satellite -j4
-# Produces: CPU2/ipcc_m0plus.bin (38.5 KB)
-
-# 3. Build CPU2 Cortex-M0+ Ground Station Firmware
-make APP=gs -j4
-# Produces: CPU2/gs_m0plus.bin (40.7 KB)
-```
-
-### Flashing via Make Targets (Independent Core Flashing)
-
-Both cores can be flashed **completely independently** in any order. Flashing CPU1 erases only sectors 0–99 (leaving CPU2 at `0x08032000` intact). Flashing CPU2 erases only sectors 100–127 (leaving CPU1 at `0x08000000` intact).
-
-From the workspace root (`/home/prem/Desktop/nuttxspace`):
+### Getting the Code
 
 ```bash
-# 1. Flash CPU1 (Cortex-M4 / NuttX) ONLY to 0x08000000 (CPU2 is preserved):
-make flash_cpu1
-# (or 'make flash')
-
-# 2. Flash CPU2 (Cortex-M0+ / Satellite Radio) ONLY to 0x08032000 (CPU1 is preserved):
-make flash_sat
-
-# 3. Flash CPU2 (Cortex-M0+ / Ground Station) ONLY to 0x08032000 (CPU1 is preserved):
-make flash_gs
-
-# 4. (Optional) Flash both cores sequentially (CPU1 then CPU2, no mass erase):
-make flash_all_sat
-make flash_all_gs
+git clone <this-repo-url> nuttxspace
+cd nuttxspace
 ```
 
-From inside the `nuttx/` directory:
+All commands below are run from the repository root.
+
+### Building
+
 ```bash
-# Flash CPU1 only:
-make flash
-# (or 'make flash_cpu1')
+# CPU1 Cortex-M4 (NuttX OBC). Runs configure.sh with nucleo-wl55jc:nsh on the first build.
+make build_m4          # -> nuttx/nuttx.bin
 
-# Flash CPU2 from nuttx directory:
-make flash_sat
-make flash_gs
+# CPU2 Cortex-M0+ Satellite firmware (JC1 board)
+make build_sat_m0      # -> Satellite_M0+/Com_sat/satellite.bin
+
+# CPU2 Cortex-M0+ Ground Station firmware (JC2 board)
+make build_gs          # -> Ground_Station/gs_m0plus.bin
 ```
+
+To reset the M4 configuration to the project defaults (USART1 console, `launcher_main` entry point):
+
+```bash
+make -C nuttx distclean
+make configure_m4
+```
+
+The NuttX entry point is `launcher_main` (`apps/examples/camera_launcher`). It starts the
+`obc_main` and `littlefs` tasks and then the NSH shell on the USART1 console.
+
+### Flashing (Independent Core Flashing)
+
+Each core is flashed independently, in any order. Flashing CPU1 writes only sectors 0–99
+(CPU2 at `0x08032000` is preserved); flashing CPU2 writes only sectors 100–127.
+
+```bash
+make flash_M4        # CPU1 (M4 NuttX), same image for both boards
+make flashsatM0      # CPU2 Satellite firmware   (JC1 board only)
+make flash_GS        # CPU2 Ground Station firmware (JC2 board only)
+make flash_all_sat   # CPU1 + CPU2 Satellite
+```
+
+> [!IMPORTANT]
+> **After a full chip erase, power-cycle the board once after flashing.**
+> A mass erase sets the `FLASH_ACR.EMPTY` flag, and while it is set the M4 boots the ST ROM
+> bootloader instead of NuttX, so nothing prints on the console even though the image is
+> correct. Unplugging and replugging USB clears the flag. With OpenOCD you can also clear
+> it directly: `mww 0x58004000 0x00000602` followed by `reset run`.
+>
+> A mass erase also wipes the M0+ firmware, so flash CPU2 again (`make flashsatM0` or
+> `make flash_GS`). NuttX still boots if CPU2 is empty; it prints a warning and does not start CPU2.
 
 ### Manual Flashing via `STM32_Programmer_CLI`
 
 > [!WARNING]
-> **DO NOT use Mass Erase (`-e all`)!** Mass erase will wipe both cores simultaneously. The `-w` parameter performs sector-level erasure only for the target core's address space.
+> **DO NOT use Mass Erase (`-e all`)!** It wipes both cores. `-w` erases only the sectors being written.
 
 ```bash
-# Flash CPU1 (M4 NuttX OBC) to 0x08000000 (Sectors 0 - 99):
 STM32_Programmer_CLI -c port=SWD -w nuttx/nuttx.bin 0x08000000 -v -hardRst
-
-# Flash CPU2 (M0+ Satellite Radio) to 0x08032000 (Sectors 100 - 127):
-STM32_Programmer_CLI -c port=SWD -w CPU2/ipcc_m0plus.bin 0x08032000 -v -hardRst
-
-# Flash CPU2 (M0+ Ground Station) to 0x08032000 (Sectors 100 - 127):
-STM32_Programmer_CLI -c port=SWD -w CPU2/gs_m0plus.bin 0x08032000 -v -hardRst
+STM32_Programmer_CLI -c port=SWD -w Satellite_M0+/Com_sat/satellite.bin 0x08032000 -v -hardRst
+STM32_Programmer_CLI -c port=SWD -w Ground_Station/gs_m0plus.bin 0x08032000 -v -hardRst
 ```
 
 ### Manual Flashing via `OpenOCD`
 
 ```bash
-# Flash CPU1 (M4 NuttX OBC) to 0x08000000:
 openocd -f interface/stlink.cfg -f target/stm32wlx.cfg \
-  -c "init" -c "targets" -c "reset halt" -c "flash probe 0" \
-  -c "program nuttx/nuttx.bin 0x08000000 verify" \
-  -c "reset run" -c "exit"
-
-# Flash CPU2 (M0+ Satellite Radio) to 0x08032000:
-openocd -f interface/stlink.cfg -f target/stm32wlx.cfg \
-  -c "init" -c "targets" -c "reset halt" -c "flash probe 0" \
-  -c "program CPU2/ipcc_m0plus.bin 0x08032000 verify" \
-  -c "reset run" -c "exit"
+  -c "program nuttx/nuttx.bin 0x08000000 verify reset exit"
 ```
+
+> If a VS Code debug session (Cortex-Debug) is running, it holds the ST-LINK and other
+> flashing tools fail to connect. Stop the debug session first.
+
+### Old Reference Code
+
+The earlier prototype projects are separate repositories and are not included here:
+- [Dual_Core_STM32WL55_GMSK_RIngbuffer](https://github.com/PrmBRana/Dual_Core_STM32WL55_GMSK_RIngbuffer)
+- [CW1_CW2_live_HK_data_Dual_core_STM32WL55JC1](https://github.com/PrmBRana/CW1_CW2_live_HK_data_Dual_core_STM32WL55JC1)
+- [test_M0-](https://github.com/PrmBRana/test_M0-)
 
 ---
 
 ## 10. Serial Console & CuteCom Setup
 
-Connect your board to the computer via the onboard ST-LINK micro-USB connector.
+The NuttX console is **USART1**: **PA9 = TX**, **PA10 = RX** (plus GND). Connect a 3.3 V
+USB-UART adapter to these pins. The ST-LINK virtual COM port (`/dev/ttyACM0`) is wired to
+LPUART1, not USART1, so the console does not appear there.
 
 | Parameter | Value |
 |:---|:---|
-| **Port** | `/dev/ttyACM0` (Linux) |
+| **Port** | `/dev/ttyUSB0` (Linux, USB-UART adapter) |
 | **Baud Rate** | **`115200 bps`** |
 | **Data Bits** | `8` |
 | **Stop Bits** | `1` |
@@ -381,8 +383,5 @@ NuttShell (NSH) NuttX-12.13.0
 nsh>
 ```
 
-Start telemetry acquisition by running:
-```bash
-nsh> OBC_main &
-```
-Telemetry scans and real-time M0+ radio logs will begin streaming immediately.
+`launcher_main` then starts the `obc_main` and `littlefs` tasks automatically (no need to
+run `OBC_main` by hand). Telemetry scans and real-time M0+ radio logs will begin streaming immediately.
