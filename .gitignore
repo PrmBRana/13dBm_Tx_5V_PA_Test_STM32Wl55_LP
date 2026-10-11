@@ -16,3 +16,10 @@ Satellite_M0+/Com_sat/old_code_reference/
 
 
 
+
+# Local tools / papers / runtime exports (not part of the firmware)
+nuttx/stm32flash-src/
+generate_*.py
+merge_all_papers.py
+z.gitignore
+Ground_Station/GS_Telemetry_*.xlsx

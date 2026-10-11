@@ -118,8 +118,12 @@
 
 #define UART_RX_RING_SZ  256U
 static uint8_t  s_rx_ring[UART_RX_RING_SZ];
-static uint16_t s_rx_head;
-static uint16_t s_rx_tail;
+static volatile uint16_t s_rx_head;
+static volatile uint16_t s_rx_tail;
+
+/* RX is interrupt driven: the main loop blocks for whole TX/RX windows and the
+ * USART holds only one byte, so polling alone drops console characters. */
+#define USART_CR1_RXNEIE  (1UL << 5)
 
 static void uart_rx_push(uint8_t b)
 {
@@ -158,7 +162,7 @@ static void uart_rx_drain(void);
 #define RCC_C2APB1SMENR2  (*(volatile uint32_t *)0x5800017CUL)
 #define GPIOA_AFRL        (*(volatile uint32_t *)0x48000020UL)
 
-static void uart_rx_drain(void)
+static void uart_rx_drain_isr(void)
 {
     if (USART1_ISR & (USART_ISR_ORE | USART_ISR_FE | USART_ISR_NE))
     {
@@ -178,6 +182,17 @@ static void uart_rx_drain(void)
     while (LPUART1_ISR & USART_ISR_RXNE)
         uart_rx_push((uint8_t)(LPUART1_RDR & 0xFFUL));
 }
+
+static void uart_rx_drain(void)
+{
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    uart_rx_drain_isr();
+    __set_PRIMASK(primask);
+}
+
+void USART1_IRQHandler(void)  { uart_rx_drain_isr(); }
+void LPUART1_IRQHandler(void) { uart_rx_drain_isr(); }
 
 /*
  * ==========================================================================
@@ -254,7 +269,7 @@ void uart1_init(void)
   USART1_CR3 = 0;
   USART1_BRR = USART1_BRR_48MHZ_115200;
   USART1_ICR = 0xFFFFFFFFUL;
-  USART1_CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_UE;
+  USART1_CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_UE | USART_CR1_RXNEIE;
 
   /*
    * 6. Initialize LPUART1 (PA2/PA3)
@@ -262,7 +277,12 @@ void uart1_init(void)
   LPUART1_CR1 = 0;
   LPUART1_BRR = LPUART1_BRR_48MHZ_115200;
   LPUART1_ICR = 0xFFFFFFFFUL;
-  LPUART1_CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_UE;
+  LPUART1_CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_UE | USART_CR1_RXNEIE;
+
+  NVIC_SetPriority(USART1_IRQn, 3);
+  NVIC_SetPriority(LPUART1_IRQn, 3);
+  NVIC_EnableIRQ(USART1_IRQn);
+  NVIC_EnableIRQ(LPUART1_IRQn);
 }
 
 /*
@@ -291,7 +311,7 @@ void uart1_putc(char c)
       USART1_CR1 = 0;
       USART1_BRR = USART1_BRR_48MHZ_115200;
       USART1_ICR = 0xFFFFFFFFUL;
-      USART1_CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_UE;
+      USART1_CR1 = USART_CR1_TE | USART_CR1_RE | USART_CR1_UE | USART_CR1_RXNEIE;
     }
 
   if (USART1_ISR & 0x0FUL) { USART1_ICR = 0x0FUL; }

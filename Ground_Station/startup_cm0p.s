@@ -172,7 +172,7 @@ g_vectors:
 
 
 /* IRQ27 USART1 */
-.word Default_Handler
+.word USART1_IRQHandler
 
 
 /* IRQ28 USART2 */
@@ -180,7 +180,7 @@ g_vectors:
 
 
 /* IRQ29 LPUART1 */
-.word Default_Handler
+.word LPUART1_IRQHandler
 
 
 /* IRQ30 SUBGHZSPI */
