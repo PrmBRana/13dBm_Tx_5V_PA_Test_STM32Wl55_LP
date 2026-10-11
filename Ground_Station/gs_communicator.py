@@ -3087,15 +3087,15 @@ def run_gui(default_port=None, baudrate=115200):
                     f"RF: ACTIVE | Packets: 0 | ACKs: 0")
                 reset_ack_banner()
 
-                # Command uplink uses RFO_LP +14 dBm so a normal USB supply does not brown out
+                # Automatically configure Ground Station hardware to +22 dBm HP RFO
                 def init_gs_link():
                     time.sleep(0.2)
                     if ser and ser.is_open:
                         try:
-                            ser.write(b"PA LP\r\n")
+                            ser.write(b"PA HP\r\n")
                             ser.flush()
                             time.sleep(0.05)
-                            ser.write(b"PWR 14\r\n")
+                            ser.write(b"PWR 22\r\n")
                             ser.flush()
                             time.sleep(0.05)
                             ser.write(b"S\r\n")
@@ -3121,7 +3121,7 @@ def run_gui(default_port=None, baudrate=115200):
     append_log(f" {APP_TITLE} (GMSK Telecommand & Telemetry Segment)\n", "info")
     append_log(f" Downlink RX : {RX_FREQ_STR}\n", "info")
     append_log(f" Uplink TX   : {TX_FREQ_STR}\n", "info")
-    append_log(" STM32WL55JC2 Ground Station Radio Interface Ready (RFO_LP +14 dBm).\n", "info")
+    append_log(" STM32WL55JC2 Ground Station Radio Interface Ready (RFO_HP +22 dBm).\n", "info")
     append_log(" Auto-detected port: Connect to /dev/ttyUSB0 to receive live satellite downlink.\n", "info")
     append_log("=" * 76 + "\n", "info")
 
@@ -3169,10 +3169,10 @@ def run_cli(port=None, baudrate=115200):
 
     try:
         time.sleep(0.15)
-        ser.write(b"PA LP\r\n")
+        ser.write(b"PA HP\r\n")
         ser.flush()
         time.sleep(0.05)
-        ser.write(b"PWR 14\r\n")
+        ser.write(b"PWR 22\r\n")
         ser.flush()
         time.sleep(0.05)
         ser.write(b"S\r\n")
