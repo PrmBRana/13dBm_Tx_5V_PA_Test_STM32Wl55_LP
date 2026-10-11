@@ -1012,10 +1012,13 @@ void GS_Init(const GroundStationConfig_t *config)
 
     RadioApp_Init(&s_config.radio, &s_RadioEvents);
 
-    /* GS is STM32WL55JC2 → RFO_HP (+22 dBm) for uplink TX */
-    RadioApp_SetPaSelect(RFO_HP);
-    RadioApp_SetTxPower(22);
-    GS_SetRFSwitch(RBI_SWITCH_RFO_HP);
+    /* RFO_LP +14 dBm. RFO_HP +22 dBm turns the external PA on and browns out
+     * a normal USB supply, so the command never leaves the board. CW receive
+     * still works because that path keeps the PA off. Send "PA HP" / "PWR 22"
+     * only when the supply stays up during transmit. */
+    RadioApp_SetPaSelect(RFO_LP);
+    RadioApp_SetTxPower(14);
+    GS_SetRFSwitch(RBI_SWITCH_RFO_LP);
 
     s_last_auto_cmd_time_ms = GS_GetTimeMs();
 
@@ -1024,9 +1027,9 @@ void GS_Init(const GroundStationConfig_t *config)
 
     uart2_puts("\r\n========================================================================\r\n");
     uart2_puts("  ANTARIKCHYA PRATISTHAN NEPAL (APN)  —  S2S-2 GROUND STATION\r\n");
-    uart2_puts("  FW-ID: GS-G3RUH-20261006 | RFO_HP +22 dBm | FULL DOWNLINK DECODE\r\n");
+    uart2_puts("  FW-ID: GS-G3RUH-20261011 | RFO_LP +14 dBm | FULL DOWNLINK DECODE\r\n");
     uart2_puts("========================================================================\r\n");
-    uart2_printf("  Uplink TX       : %lu Hz  (437.375 MHz, RFO_HP, +22 dBm)\r\n",
+    uart2_printf("  Uplink TX       : %lu Hz  (437.375 MHz, RFO_LP, +14 dBm)\r\n",
                  (unsigned long)s_config.radio.txFrequency);
     uart2_printf("  Downlink RX     : %lu Hz  (435.000 MHz, CW + GMSK 4800 bps)\r\n",
                  (unsigned long)s_config.radio.rxFrequency);
