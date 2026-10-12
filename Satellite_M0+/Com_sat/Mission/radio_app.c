@@ -104,13 +104,28 @@ void RadioApp_Init(
         "Deviation = %d Hz\r\n",
         RADIO_FDEV_HZ);
 
-    /* Never call Radio.SetRxConfig(): it programs ST FSK defaults
-     * (sync C1 94 C1, BT=1, whitening ON, 8-bit preamble detect) which
-     * dump 200 bytes of noise at ~-124 dBm with no 0x7E flags. */
+    /* SetRxConfig is required so SubgRf.RxContinuous stays true (Radio.Rx(0)
+     * otherwise times out immediately). It also programs ST FSK defaults
+     * (sync C1 94 C1, BT=1, whitening ON) — ForceOpen overwrites those. */
+    Radio.SetRxConfig(
+        MODEM_FSK,
+        RADIO_RX_BANDWIDTH_HZ,
+        RADIO_BIT_RATE_BPS,
+        0,
+        RADIO_RX_BANDWIDTH_HZ,
+        (uint16_t)(RADIO_PREAMBLE_LENGTH_BITS / 8U),
+        0,
+        true,
+        RADIO_FIXED_PACKET_LEN,
+        false,
+        false,
+        0,
+        false,
+        true);
     RadioApp_ForceOpenGfskParams();
 
-    uart2_puts("RadioApp_Init: FW-ID SAT-G3RUH-UPLINK7\r\n");
-    uart2_puts("RadioApp_Init: GFSK RX = preamble 16-bit detect + 200 B, then G3RUH decode\r\n");
+    uart2_puts("RadioApp_Init: FW-ID SAT-G3RUH-UPLINK8\r\n");
+    uart2_puts("RadioApp_Init: GFSK RX = preamble + sync 93 0B 51 DE + 200 B G3RUH\r\n");
     uart2_printf(
         "RadioApp_Init: EXIT\r\n");
 }
@@ -153,28 +168,15 @@ void RadioApp_StartRx(void)
     if (!s_initialized)
         return;
 
+    /* Do not call Radio.SetRxConfig() here: it writes sync C1 94 C1 and
+     * whitening, which never match a GS uplink (sync 93 0B 51 DE, no whitening).
+     * RxContinuous was set true in RadioApp_Init. */
     RadioApp_ArmCommon(
         s_config.rxFrequency);
 
-    /* RxContinuous=true so RxDone does not drop TCXO to STDBY_RC (missed uplinks).
-     * SetRxConfig programs ST FSK defaults; ForceOpen immediately overwrites them. */
-    Radio.SetRxConfig(
-        MODEM_FSK,
-        RADIO_RX_BANDWIDTH_HZ,
-        RADIO_BIT_RATE_BPS,
-        0,
-        RADIO_RX_BANDWIDTH_HZ,
-        (uint16_t)(RADIO_PREAMBLE_LENGTH_BITS / 8U),
-        0,
-        true,
-        RADIO_FIXED_PACKET_LEN,
-        false,
-        false,
-        0,
-        false,
-        true);
+    /* Antenna on the RX path. Both external PAs stay off. */
+    RBI_ConfigRFSwitch(RBI_SWITCH_RX);
 
-    RadioApp_ForceOpenGfskParams();
     extern void CPU2_Delay_Ms(uint32_t ms);
     SUBGRF_SetStandby(STDBY_XOSC);
     CPU2_Delay_Ms(5);
@@ -276,9 +278,14 @@ void RadioApp_ForceOpenGfskParams(void)
     packetParams.PacketType =
         PACKET_TYPE_GFSK;
 
-    /* Uplink RX must match the firmware that already decoded GROUND commands:
-     * do not require HW sync 93 0B 51 DE (hardware sync RX stopped all uplink).
-     * Detect 16-bit 0101 preamble, take 200 B, then software G3RUH hunt for 0x7E. */
+    /* Uplink RX must match Ground Station TX:
+     *   128-bit preamble + sync 93 0B 51 DE + 200-byte G3RUH payload.
+     * SyncWordLength=0 used to start the FIFO mid-preamble (and left the
+     * ST default C1 94 C1 in the chip after SetRxConfig), so no GS packet
+     * ever produced a valid G3RUH frame. */
+    static uint8_t s_uplink_sync[8] = RADIO_DOWNLINK_SYNC_WORD;
+    SUBGRF_SetSyncWord(s_uplink_sync);
+
     packetParams.Params.Gfsk.PreambleLength =
         RADIO_PREAMBLE_LENGTH_BITS;
 
@@ -286,7 +293,7 @@ void RadioApp_ForceOpenGfskParams(void)
         RADIO_PREAMBLE_DETECTOR_16_BITS;
 
     packetParams.Params.Gfsk.SyncWordLength =
-        0;
+        RADIO_DOWNLINK_SYNC_WORD_BITS;
 
     packetParams.Params.Gfsk.AddrComp =
         RADIO_ADDRESSCOMP_FILT_OFF;
@@ -321,6 +328,7 @@ void RadioApp_ForceOpenGfskParams(void)
 
     SUBGRF_SetPacketParams(
         &packetParams);
+    SUBGRF_SetSyncWord(s_uplink_sync);
 
     /*
      * Modulation parameters.

@@ -57,7 +57,7 @@ uint32_t board_button_initialize(void)
    * also configured for the pin.
    */
 
-  stm32wl5_configgpio(GPIO_BUTTON1);
+  /* Skip BUTTON1: the Nucleo mapping is PA0, which is the 5V DC/DC enable. */
   stm32wl5_configgpio(GPIO_BUTTON2);
 #ifndef CONFIG_ARCH_BOARD_NUCLEO_WL55JC_DEMO_LED_IRQ
   stm32wl5_configgpio(GPIO_BUTTON3);

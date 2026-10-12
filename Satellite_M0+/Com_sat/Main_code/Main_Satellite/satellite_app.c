@@ -71,8 +71,14 @@ static void Satellite_GMSK_Stop(void)
     CPU2_Delay_Ms(10);
     HAL_GPIO_WritePin(DCDC_5V_EN_PORT, DCDC_5V_EN_PIN, GPIO_PIN_RESET);
     CPU2_Delay_Ms(20);
-    HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_RESET);
+    RBI_SetTxSwitchConfig(RBI_SWITCH_RFO_LP);
     Satellite_SetRFSwitch(RBI_SWITCH_RX);
+}
+
+void Satellite_GMSK_Release(void)
+{
+    Satellite_GMSK_Stop();
 }
 
 /* After a GMSK packet: keep 5V PA biased during a burst; restore 3.3V only
@@ -112,18 +118,25 @@ void OnTxTimeout(void) {
     Satellite_SetRFSwitch(RBI_SWITCH_OFF);
 }
 
+volatile uint32_t g_stat_rx_done = 0;
+volatile uint32_t g_stat_rx_err = 0;
+volatile uint32_t g_stat_rx_timeout = 0;
+
 void OnRxTimeout(void) {
+    g_stat_rx_timeout++;
     uart1_puts("*** PACKET RECEIVED: NO (RX timeout, no signal) ***\r\n");
     rx_timeout_flag = 1;
 }
 
 void OnRxError(void) {
+    g_stat_rx_err++;
     uart1_puts("RX ERROR (CRC/sync fail at radio level)\r\n");
     uart1_puts("*** PACKET RECEIVED: NO (radio-level RX error) ***\r\n");
     rx_error_flag = 1;
 }
 
 void OnRxDone(uint8_t *payload, uint16_t size, int16_t rssi, int8_t snr) {
+    g_stat_rx_done++;
     uint16_t copy_len = (size < AX25_MAX_FRAME_SIZE) ? size : AX25_MAX_FRAME_SIZE;
     memcpy((void *)rx_frame_buffer, payload, copy_len);
     rx_frame_size = copy_len;
@@ -302,10 +315,23 @@ static const char* Get_Morse_Code(char c) {
     }
 }
 
+static void Satellite_Log_PaPins(const char *tag)
+{
+    uart1_printf("[%s] pins PA0(DCDC)=%u PC3(5VPA)=%u PC2(3V3PA)=%u  CW=%d dBm GMSK=%d dBm\r\n",
+                 tag,
+                 (unsigned)HAL_GPIO_ReadPin(DCDC_5V_EN_PORT, DCDC_5V_EN_PIN),
+                 (unsigned)HAL_GPIO_ReadPin(AMP_5V_EN_PORT, AMP_5V_EN_PIN),
+                 (unsigned)HAL_GPIO_ReadPin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN),
+                 RADIO_TX_POWER_DBM, RADIO_GMSK_TX_POWER_DBM);
+}
+
 void Satellite_CW_Prepare(void) {
     int8_t power = (s_config.txPowerDbm != 0) ? s_config.txPowerDbm : RADIO_TX_POWER_DBM;
     if (power > 14) power = 14;
     uint8_t pa_sel = RFO_LP;
+
+    /* A leftover GMSK hold would make SUBGRF_SetSwitch() take the 5V path. */
+    Satellite_SetDCDCHold(false);
 
     /* CW always uses the 3.3V PA (PC2); 5V DC/DC (PA0) and 5V PA (PC3) stay OFF */
     uart1_puts(">>> CW PREPARE: 3.3V PA (PC2=1, 5V PA OFF PC3=0, 5V Boost OFF PA0=0)\r\n");
@@ -330,6 +356,7 @@ void Satellite_CW_Prepare(void) {
     SUBGRF_WriteRegister(REG_OCP, 0x18); /* 60 mA current clamp: prevents 3.3V rail collapse & MCU brownout */
     SUBGRF_WriteRegister(REG_DRV_CTRL, 0x7 << 1);
     SUBGRF_SetSwitch(pa_sel, RFSWITCH_TX);
+    Satellite_Log_PaPins("CW");
 }
 
 void Satellite_CW_CarrierOn(void) {
@@ -354,7 +381,7 @@ void Satellite_CW_Finish(void) {
     /* Deassert 5V DC/DC; 5V PA OFF (PC3=0); 3.3V PA OFF in RX (PC2=0); switch RF to RX */
     HAL_GPIO_WritePin(DCDC_5V_EN_PORT, DCDC_5V_EN_PIN, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(AMP_5V_EN_PORT, AMP_5V_EN_PIN, GPIO_PIN_RESET);   /* PC3 = 0 (5V PA OFF) */
-    HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_SET);   /* PC2 = 1 (3.3V PA stays ON) */
+    HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_RESET); /* PC2 = 0 (3.3V PA OFF in RX) */
     Satellite_SetRFSwitch(RBI_SWITCH_RX);
     SUBGRF_SetDioIrqParams(IRQ_RADIO_NONE, IRQ_RADIO_NONE, IRQ_RADIO_NONE, IRQ_RADIO_NONE);
     SUBGRF_ClearIrqStatus(IRQ_RADIO_ALL);
@@ -365,7 +392,7 @@ void Satellite_CW_Abort_To_Rx(void) {
     Satellite_CW_CarrierOff();
     HAL_GPIO_WritePin(AMP_5V_EN_PORT, AMP_5V_EN_PIN, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(DCDC_5V_EN_PORT, DCDC_5V_EN_PIN, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_SET);   /* 3.3V PA back ON */
+    HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_RESET); /* 3.3V PA OFF in RX */
     Satellite_SetRFSwitch(RBI_SWITCH_RX);
     /* Immediately keep radio armed in RX mode with IRQs enabled to capture full burst */
     RadioApp_StartRx();
@@ -454,10 +481,10 @@ void Satellite_Hold_Continuous_Carrier_5V(uint32_t seconds) {
     SUBGRF_SetStandby(STDBY_RC);
     Radio.Standby();
 
-    /* Power down 5V PA PC3, 5V DC/DC PA0, restore 3.3V PA (always enabled) and RF switch to RX */
+    /* Power down 5V PA PC3, 5V DC/DC PA0, ensure 3.3V PA OFF in RX, RF switch to RX */
     HAL_GPIO_WritePin(AMP_5V_EN_PORT, AMP_5V_EN_PIN, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(DCDC_5V_EN_PORT, DCDC_5V_EN_PIN, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_SET);   /* 3.3V PA back ON */
+    HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_RESET);
     Satellite_SetRFSwitch(RBI_SWITCH_RX);
     SUBGRF_SetDioIrqParams(IRQ_RADIO_NONE, IRQ_RADIO_NONE, IRQ_RADIO_NONE, IRQ_RADIO_NONE);
     SUBGRF_ClearIrqStatus(IRQ_RADIO_ALL);
@@ -655,10 +682,7 @@ void Satellite_Init(const SatelliteConfig_t *config) {
     HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(AMP_5V_EN_PORT, AMP_5V_EN_PIN, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(DCDC_5V_EN_PORT, DCDC_5V_EN_PIN, GPIO_PIN_RESET);
-    uart1_puts("[INIT] 4. RF Dual-PA & 5V DC/DC Configured (JC1 Low Power Mode) ... [OK]\r\n");
-    uart1_puts("       - CW Mode   : 3.3V External PA (PC2/SO2)  | 5V DC/DC (PA0): OFF\r\n");
-    uart1_puts("       - GMSK Mode : 5V External PA (PC3/SI2)    | 5V DC/DC (PA0): ENABLED FOR TX\r\n");
-    uart1_puts("       - GMSK TX   : 128-bit preamble + sync word 93 0B 51 DE + 200 B (RFO_LP, 5V PA duty 0x03)\r\n");
+    uart1_puts("[INIT] 4. RF Dual-PA & 5V DC/DC Configured ............. [OK]\r\n");
 
     MX_SUBGHZ_Init();
     HAL_NVIC_SetPriority(SUBGHZ_Radio_IRQn, 0, 0);
@@ -858,34 +882,77 @@ bool Satellite_Run_CW_Session_Ex(uint32_t cycle,
 
 void Satellite_GMSK_Prepare(void) {
     uint8_t pa_sel = RFO_LP;
+    const bool use_5v = (s_config.rfSwitchConfig5V == RBI_SWITCH_RFO_LP5V);
 
-    const bool pa5v_already_on =
-        (HAL_GPIO_ReadPin(AMP_5V_EN_PORT, AMP_5V_EN_PIN) == GPIO_PIN_SET) &&
-        (HAL_GPIO_ReadPin(DCDC_5V_EN_PORT, DCDC_5V_EN_PIN) == GPIO_PIN_SET);
+    if (use_5v) {
+        const bool pa5v_already_on =
+            (HAL_GPIO_ReadPin(AMP_5V_EN_PORT, AMP_5V_EN_PIN) == GPIO_PIN_SET) &&
+            (HAL_GPIO_ReadPin(DCDC_5V_EN_PORT, DCDC_5V_EN_PIN) == GPIO_PIN_SET);
 
-    /* Already biased for this downlink session: do not re-toggle switch/PA. */
-    if (pa5v_already_on) {
+        /* Already biased for this downlink session: do not re-toggle switch/PA. */
+        if (pa5v_already_on) {
+            RBI_SetTxSwitchConfig(RBI_SWITCH_RFO_LP5V);
+            SUBGRF_WriteRegister(REG_OCP, 0x18);
+            RadioApp_SetTxPower(RADIO_GMSK_TX_POWER_DBM);
+            RadioApp_SetPaSelect(pa_sel);
+            return;
+        }
+
+        /* Keep TCXO in STDBY_XOSC. Radio.Standby() drops to STDBY_RC and brown-outs 5V PA TX. */
+        SUBGRF_SetStandby(STDBY_XOSC);
+
+        /* 5V LP sequence: 3.3V PA off, 5V DC/DC on and settled, 5V PA on and
+         * biased, then RF switch to TX. Each step must settle before the next
+         * load lands on the supply. */
+        HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_RESET);
+        CPU2_Delay_Ms(5);
+
+        RBI_Enable5VDCDC(1);
+        CPU2_Delay_Ms(SAT_5V_DCDC_SETTLE_MS);
+
+        HAL_GPIO_WritePin(AMP_5V_EN_PORT, AMP_5V_EN_PIN,
+                          RBI_IsPAEnabled() ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        CPU2_Delay_Ms(SAT_5V_PA_BIAS_MS);
+
         RBI_SetTxSwitchConfig(RBI_SWITCH_RFO_LP5V);
-        RadioApp_SetTxPower(RADIO_GMSK_TX_POWER_DBM);
-        RadioApp_SetPaSelect(pa_sel);
-        return;
+        Satellite_SetRFSwitch(RBI_SWITCH_RFO_LP5V);
+        CPU2_Delay_Ms(40);
+
+        SUBGRF_WriteRegister(REG_OCP, 0x18); /* 60 mA current clamp: prevents 3.3V rail collapse & MCU brownout */
+        uart1_puts("[GMSK] 5V PA ON\r\n");
+    } else {
+        const bool pa3v3_already_on =
+            (HAL_GPIO_ReadPin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN) == GPIO_PIN_SET) &&
+            (HAL_GPIO_ReadPin(DCDC_5V_EN_PORT, DCDC_5V_EN_PIN) == GPIO_PIN_RESET) &&
+            (HAL_GPIO_ReadPin(AMP_5V_EN_PORT, AMP_5V_EN_PIN) == GPIO_PIN_RESET);
+
+        if (pa3v3_already_on) {
+            RBI_SetTxSwitchConfig(RBI_SWITCH_RFO_LP);
+            SUBGRF_WriteRegister(REG_OCP, 0x18);
+            RadioApp_SetTxPower(RADIO_TX_POWER_DBM);
+            RadioApp_SetPaSelect(pa_sel);
+            return;
+        }
+
+        /* Safe Bench Mode: 3.3V PA (PC2), 5V DC/DC (PA0) and 5V PA (PC3) strictly OFF */
+        SUBGRF_SetStandby(STDBY_XOSC);
+
+        RBI_Enable5VDCDC(0);
+        HAL_GPIO_WritePin(AMP_5V_EN_PORT, AMP_5V_EN_PIN, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN,
+                          RBI_IsPAEnabled() ? GPIO_PIN_SET : GPIO_PIN_RESET);
+
+        RBI_SetTxSwitchConfig(RBI_SWITCH_RFO_LP);
+        Satellite_SetRFSwitch(RBI_SWITCH_RFO_LP);
+        CPU2_Delay_Ms(5);
+
+        SUBGRF_WriteRegister(REG_OCP, 0x18); /* 60 mA current clamp: prevents 3.3V rail collapse & MCU brownout */
+        uart1_puts("[GMSK] 3.3V Safe Mode ON\r\n");
     }
-
-    /* Keep TCXO in STDBY_XOSC. Radio.Standby() drops to STDBY_RC and brown-outs 5V PA TX. */
-    SUBGRF_SetStandby(STDBY_XOSC);
-
-    HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_RESET);
-    CPU2_Delay_Ms(5);
-
-    RBI_Enable5VDCDC(1);
-    CPU2_Delay_Ms(100);
-
-    RBI_SetTxSwitchConfig(RBI_SWITCH_RFO_LP5V);
-    Satellite_SetRFSwitch(RBI_SWITCH_RFO_LP5V);
-    CPU2_Delay_Ms(40);
+    Satellite_Log_PaPins("GMSK");
 
     SUBGRF_SetPacketType(PACKET_TYPE_GFSK);
-    RadioApp_SetTxPower(RADIO_GMSK_TX_POWER_DBM);
+    RadioApp_SetTxPower(use_5v ? RADIO_GMSK_TX_POWER_DBM : RADIO_TX_POWER_DBM);
     RadioApp_SetPaSelect(pa_sel);
 }
 
@@ -1702,16 +1769,14 @@ void Satellite_Send_Ack_Accepted(uint8_t mission_id)
     Satellite_GMSK_Prepare();
     CPU2_Delay_Ms(50);
 
-    const char *ack_pa_str = (s_config.rfSwitchConfig5V == RBI_SWITCH_RFO_LP5V) ? "5V PA" : "3.3V PA (Safe Mode)";
-    uart1_printf("\r\n>>> [M0+ TX ACK 1/2] Sending Flight Spec ACK Accepted (GMSK): 0x%02X 0x%02X 0x%02X (mission=0x%02X) via %s <<<\r\n",
-                 ack_payload[0], ack_payload[1], ack_payload[2], ack_payload[2], ack_pa_str);
-    uart1_printf("[TX-HEX] hex(3):%02X%02X%02X\r\n", ack_payload[0], ack_payload[1], ack_payload[2]);
+    const char *ack_pa_str = (s_config.rfSwitchConfig5V == RBI_SWITCH_RFO_LP5V) ? "5V PA" : "3.3V PA";
+    uart1_printf("\r\n>>> [M0+ TX ACK 1/2] %02X %02X %02X via %s <<<\r\n",
+                 ack_payload[0], ack_payload[1], ack_payload[2], ack_pa_str);
     Satellite_Send_Packet(ack_payload, sizeof(ack_payload));
     CPU2_Delay_Ms(80);
 
-    uart1_printf(">>> [M0+ TX ACK 2/2] Sending Flight Spec ACK Accepted (GMSK): 0x%02X 0x%02X 0x%02X (mission=0x%02X) via %s <<<\r\n",
-                 ack_payload[0], ack_payload[1], ack_payload[2], ack_payload[2], ack_pa_str);
-    uart1_printf("[TX-HEX] hex(3):%02X%02X%02X\r\n", ack_payload[0], ack_payload[1], ack_payload[2]);
+    uart1_printf(">>> [M0+ TX ACK 2/2] %02X %02X %02X via %s <<<\r\n",
+                 ack_payload[0], ack_payload[1], ack_payload[2], ack_pa_str);
     Satellite_Send_Packet(ack_payload, sizeof(ack_payload));
 }
 

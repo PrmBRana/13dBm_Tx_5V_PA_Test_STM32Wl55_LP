@@ -32,12 +32,13 @@ int8_t RadioApp_GetTxPower(void)
 
 void RadioApp_SetPaSelect(uint8_t paSelect)
 {
-    s_radio_pa_select = paSelect;
+    (void)paSelect;
+    s_radio_pa_select = RFO_HP; /* Ground Station Nucleo-WL55JC2 is strictly RFO_HP (+22 dBm) */
 }
 
 uint8_t RadioApp_GetPaSelect(void)
 {
-    return s_radio_pa_select;
+    return RFO_HP;
 }
 
 static void RadioApp_ArmCommon(
@@ -257,18 +258,14 @@ void RadioApp_Send(
     modParams.Params.Gfsk.Bandwidth = SUBGRF_GetFskBandwidthRegValue(RADIO_RX_BANDWIDTH_HZ);
     SUBGRF_SetModulationParams(&modParams);
 
-    /* 5. Set PA configuration and output power */
-    if (s_radio_pa_select == RFO_HP) {
-        SUBGRF_SetPaConfig(0x04, 0x07, 0x00, 0x01);
-        SUBGRF_SetTxParams(RFO_HP, s_radio_tx_power_dbm, RADIO_RAMP_200_US);
-    } else {
-        SUBGRF_SetPaConfig(0x04, 0x00, 0x01, 0x01);
-        SUBGRF_SetTxParams(RFO_LP, s_radio_tx_power_dbm, RADIO_RAMP_200_US);
-    }
+    /* 5. Set PA configuration and output power: Ground Station LOCKED to RFO_HP (+22 dBm) */
+    s_radio_pa_select = RFO_HP;
+    SUBGRF_SetPaConfig(0x04, 0x07, 0x00, 0x01);
+    SUBGRF_SetTxParams(RFO_HP, s_radio_tx_power_dbm, RADIO_RAMP_200_US);
     SUBGRF_WriteRegister(REG_DRV_CTRL, 0x7 << 1);
 
     /* 6. Set RF switch to TX */
-    SUBGRF_SetSwitch(s_radio_pa_select, RFSWITCH_TX);
+    SUBGRF_SetSwitch(RFO_HP, RFSWITCH_TX);
 
     /* 7. Set buffer base and write payload to TX FIFO */
     SUBGRF_SetBufferBaseAddress(SUBGHZ_TX_BUFFER_BASE, SUBGHZ_RX_BUFFER_BASE);
@@ -476,18 +473,14 @@ void RadioApp_TransmitCarrier(
     /* 2. Configure RF frequency */
     SUBGRF_SetRfFrequency(frequencyHz);
 
-    /* 3. Configure PA configuration and output power */
-    if (s_radio_pa_select == RFO_HP) {
-        SUBGRF_SetPaConfig(0x04, 0x07, 0x00, 0x01);
-        SUBGRF_SetTxParams(RFO_HP, s_radio_tx_power_dbm, RADIO_RAMP_200_US);
-    } else {
-        SUBGRF_SetPaConfig(0x04, 0x00, 0x01, 0x01);
-        SUBGRF_SetTxParams(RFO_LP, s_radio_tx_power_dbm, RADIO_RAMP_200_US);
-    }
+    /* 3. Configure PA configuration and output power: Ground Station LOCKED to RFO_HP (+22 dBm) */
+    s_radio_pa_select = RFO_HP;
+    SUBGRF_SetPaConfig(0x04, 0x07, 0x00, 0x01);
+    SUBGRF_SetTxParams(RFO_HP, s_radio_tx_power_dbm, RADIO_RAMP_200_US);
     SUBGRF_WriteRegister(REG_DRV_CTRL, 0x7 << 1);
 
     /* 4. Set RF switch to TX */
-    SUBGRF_SetSwitch(s_radio_pa_select, RFSWITCH_TX);
+    SUBGRF_SetSwitch(RFO_HP, RFSWITCH_TX);
 
     /* 5. Transmit pure unmodulated carrier */
     SUBGRF_SetTxContinuousWave();

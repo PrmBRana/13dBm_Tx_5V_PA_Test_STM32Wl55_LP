@@ -9,13 +9,20 @@
 #include "stm32wlxx_hal.h"
 #include "stm32wlxx_it.h"
 #include "Sring_buffer.h"
+#include "radio_board_if.h"
 
 volatile uint32_t g_system_tick_ms = 0;
+volatile uint8_t g_ext_wdt_armed = 0;
 
 void SysTick_Handler(void)
 {
     g_system_tick_ms++;
     HAL_IncTick();
+
+    if (g_ext_wdt_armed && (g_system_tick_ms % EXT_WDT_KICK_MS) == 0U)
+    {
+        HAL_GPIO_TogglePin(EXT_WDT_WDI_PORT, EXT_WDT_WDI_PIN);
+    }
 }
 
 void SysTick_Init_CPU2(uint32_t sys_freq_hz)
@@ -67,6 +74,9 @@ void CPU2_Delay_Ms(uint32_t ms)
             if (stuck_count > 50000) {
                 /* If tick hasn't moved after iterations, manually increment so we never freeze */
                 g_system_tick_ms++;
+                if (g_ext_wdt_armed && (g_system_tick_ms % EXT_WDT_KICK_MS) == 0U) {
+                    HAL_GPIO_TogglePin(EXT_WDT_WDI_PORT, EXT_WDT_WDI_PIN);
+                }
                 last_tick = g_system_tick_ms;
                 stuck_count = 0;
             }

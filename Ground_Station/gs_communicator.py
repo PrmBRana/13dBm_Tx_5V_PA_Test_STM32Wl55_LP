@@ -634,7 +634,7 @@ class SDRSocketServer:
 
 PA_SETTINGS = {
     "HP": (b"PA HP\r\n", b"PWR 22\r\n"),
-    "LP": (b"PA LP\r\n", b"PWR 14\r\n"),
+    "LP": (b"PA HP\r\n", b"PWR 22\r\n"),  # Locked to RFO_HP +22 dBm: Nucleo-WL55JC2 requires RFO_HP for SMA
 }
 
 
@@ -1318,9 +1318,27 @@ def run_gui(default_port=None, baudrate=115200, pa="HP"):
                  values=["9600", "57600", "115200", "230400"]).pack(side=tk.LEFT)
 
     ttk.Label(conn_bar, text="Uplink PA:").pack(side=tk.LEFT, padx=(12, 4))
-    pa_var = tk.StringVar(value=pa)
-    ttk.Combobox(conn_bar, textvariable=pa_var, width=4, state="readonly",
-                 values=list(PA_SETTINGS.keys())).pack(side=tk.LEFT)
+    pa_var = tk.StringVar(value="HP")
+    pa_combo = ttk.Combobox(conn_bar, textvariable=pa_var, width=20, state="disabled",
+                            values=["HP (RFO_HP +22 dBm)"])
+    pa_combo.pack(side=tk.LEFT)
+
+    def on_pa_selected(event=None):
+        if ser and ser.is_open:
+            try:
+                ser.write(b"PA HP\r\n")
+                ser.flush()
+                time.sleep(0.05)
+                ser.write(b"PWR 22\r\n")
+                ser.flush()
+                time.sleep(0.05)
+                ser.write(b"STATUS\r\n")
+                ser.flush()
+                append_log(">>> [GS] Uplink PA strictly LOCKED to RFO_HP (+22 dBm)\n", "info")
+            except Exception as ex:
+                append_log(f"!!! Error updating PA: {ex}\n", "error")
+
+    pa_combo.bind("<<ComboboxSelected>>", on_pa_selected)
 
     btn_connect = ttk.Button(conn_bar, text="Connect",
                              style="Primary.TButton", width=12)
@@ -1495,18 +1513,27 @@ def run_gui(default_port=None, baudrate=115200, pa="HP"):
             print(text, end="")
 
     def send_text(text):
+        nonlocal ser
+        if not (ser and ser.is_open):
+            try:
+                toggle_conn()
+            except Exception:
+                pass
         if ser and ser.is_open:
             try:
                 ser.write((text.strip() + "\r\n").encode("utf-8"))
                 ser.flush()
                 append_log(f">>> [UPLINK-TX] {text}\n", "tx")
-                cmd_hist_list.insert(0, f"{time.strftime('%H:%M:%S')}  {text}")
-                if cmd_hist_list.size() > 200:
-                    cmd_hist_list.delete(200, tk.END)
+                try:
+                    cmd_hist_list.insert(0, f"{time.strftime('%H:%M:%S')}  {text}")
+                    if cmd_hist_list.size() > 200:
+                        cmd_hist_list.delete(200, tk.END)
+                except Exception:
+                    pass
             except Exception as e:
                 append_log(f"!!! [TX ERROR] {e}\n", "error")
         else:
-            append_log("!!! [ERROR] Serial port not connected! Connect first.\n",
+            append_log("!!! [ERROR] Serial port not connected! Please click 'Connect' on the connection bar.\n",
                        "error")
 
     def send_hex_bytes(b):
@@ -1748,7 +1775,7 @@ def run_gui(default_port=None, baudrate=115200, pa="HP"):
     custom_box = ttk.LabelFrame(cmd_right, text=" Custom Telecommand / Raw HEX Uplink ")
     custom_box.pack(fill=tk.X, padx=6, pady=6)
 
-    tk.Label(custom_box, text="Enter 13-Byte Telecommand HEX or ASCII String:",
+    tk.Label(custom_box, text="Enter Telecommand (13-Byte HEX or ASCII text command):",
              bg="#FFFFFF", fg=TEXT_MUTED).pack(anchor="w", padx=8, pady=(4, 2))
     cmd_entry = ttk.Entry(custom_box, font=("Monospace", 10))
     cmd_entry.pack(fill=tk.X, padx=8, pady=4)
@@ -1756,11 +1783,6 @@ def run_gui(default_port=None, baudrate=115200, pa="HP"):
 
     def on_custom_send_ascii():
         t = cmd_entry.get().strip()
-        # If user inadvertently clicks 'Send ASCII Text' on a hex command, route to hex send
-        cleaned_up = t.upper()
-        if cleaned_up.startswith("HEX ") or cleaned_up.startswith("HHEX ") or (len(t) >= 26 and " " in t and all(c in "0123456789ABCDEFabcdef " for c in t)):
-            on_custom_send_hex()
-            return
         if t:
             send_text(t)
 
@@ -1781,16 +1803,41 @@ def run_gui(default_port=None, baudrate=115200, pa="HP"):
             b = bytes.fromhex(clean)
             send_hex_bytes(b)
         except ValueError:
-            messagebox.showerror(
-                "Invalid HEX",
-                "Enter valid hex bytes, for example:\n"
-                "53 01 1D D2 F5 00 00 00 00 00 00 00 01")
+            # Fallback to ASCII send if it's text like PING or CARRIER
+            send_text(cmd_entry.get().strip())
+
+    def on_smart_send(event=None):
+        raw = cmd_entry.get().strip()
+        if not raw:
+            return
+        up = raw.upper()
+        known_verbs = ["PING", "HK", "CARRIER", "CW", "TONE", "S", "STATUS", "RF",
+                       "RFPINS", "BURST", "COMMAND", "DC", "DUMMY", "CAMON", "CAM",
+                       "SNAP", "ADCS", "EPDM", "HELP", "PA", "PWR", "POWER", "AUTO"]
+        is_known = any(up == v or up.startswith(v + " ") for v in known_verbs)
+        clean_cand = raw.replace(" ", "").replace(",", "").replace("0x", "").replace("0X", "")
+        has_non_hex = any(c not in "0123456789ABCDEFabcdef" for c in clean_cand)
+
+        if up.startswith("HEX "):
+            send_text(raw)
+        elif is_known or has_non_hex:
+            send_text(raw)
+        else:
+            try:
+                b = bytes.fromhex(clean_cand)
+                send_hex_bytes(b)
+            except ValueError:
+                send_text(raw)
+
+    cmd_entry.bind("<Return>", on_smart_send)
 
     btn_row = tk.Frame(custom_box, bg="#FFFFFF")
     btn_row.pack(fill=tk.X, padx=8, pady=6)
-    ttk.Button(btn_row, text="Send Telecommand (HEX)",
-               command=on_custom_send_hex,
+    ttk.Button(btn_row, text="🚀 Send Command",
+               command=on_smart_send,
                style="Action.TButton").pack(side=tk.LEFT, padx=3)
+    ttk.Button(btn_row, text="Send ASCII / Text",
+               command=on_custom_send_ascii).pack(side=tk.LEFT, padx=3)
     ttk.Button(btn_row, text="Clear",
                command=lambda: cmd_entry.delete(0, tk.END)).pack(side=tk.LEFT, padx=3)
 
@@ -2406,6 +2453,32 @@ def run_gui(default_port=None, baudrate=115200, pa="HP"):
 
     ttk.Button(log_top, text="Export Log...",
                command=save_full_log).pack(side=tk.RIGHT, padx=4)
+
+    # Interactive Terminal Input Bar at Bottom of Tab 4
+    term_bottom = tk.Frame(tab_log, bg="#FFFFFF", padx=8, pady=6, relief="solid", bd=1)
+    term_bottom.pack(fill=tk.X, padx=4, pady=(0, 4))
+
+    tk.Label(term_bottom, text="Console Command:", bg="#FFFFFF", fg=TEXT_MAIN,
+             font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT, padx=(4, 6))
+
+    term_cmd_entry = ttk.Entry(term_bottom, font=("Monospace", 10))
+    term_cmd_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+
+    def on_term_send(event=None):
+        cmd = term_cmd_entry.get().strip()
+        if not cmd:
+            return
+        send_text(cmd)
+        term_cmd_entry.delete(0, tk.END)
+
+    term_cmd_entry.bind("<Return>", on_term_send)
+
+    ttk.Button(term_bottom, text="Send ↵", command=on_term_send,
+               style="Action.TButton", width=10).pack(side=tk.LEFT, padx=4)
+    for q_cmd in ["STATUS", "PING", "CARRIER 5", "RF"]:
+        ttk.Button(term_bottom, text=q_cmd,
+                   command=lambda c=q_cmd: send_text(c),
+                   width=9).pack(side=tk.LEFT, padx=2)
 
     # =========================================================================
     # INCOMING DATA DISPATCHERS
@@ -3098,21 +3171,21 @@ def run_gui(default_port=None, baudrate=115200, pa="HP"):
                     f"RF: ACTIVE | Packets: 0 | ACKs: 0")
                 reset_ack_banner()
 
-                # HP = RFO_HP +22 dBm, LP = RFO_LP +14 dBm; which one reaches the
-                # antenna depends on the ground-station board.
-                pa_cmd, pwr_cmd = PA_SETTINGS[pa_var.get()]
-
+                # HP = RFO_HP +22 dBm (Nucleo-WL55JC2 requires RFO_HP for SMA)
                 def init_gs_link():
                     time.sleep(0.2)
                     if ser and ser.is_open:
                         try:
-                            ser.write(pa_cmd)
+                            ser.write(b"\r\n")
                             ser.flush()
                             time.sleep(0.05)
-                            ser.write(pwr_cmd)
+                            ser.write(b"PA HP\r\n")
                             ser.flush()
                             time.sleep(0.05)
-                            ser.write(b"S\r\n")
+                            ser.write(b"PWR 22\r\n")
+                            ser.flush()
+                            time.sleep(0.05)
+                            ser.write(b"STATUS\r\n")
                             ser.flush()
                         except Exception:
                             pass

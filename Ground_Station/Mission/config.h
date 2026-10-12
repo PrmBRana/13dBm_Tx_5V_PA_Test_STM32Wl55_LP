@@ -75,7 +75,7 @@ extern "C" {
  * the GS RX waits for preamble + this word, so each 200-byte packet lands
  * bit-aligned in the FIFO instead of in a random noise window.
  * MUST be identical to Satellite_M0+/Com_sat/Mission/config.h.
- * Uplink (GS TX -> satellite RX) does not use it.
+ * Used on both links: GS TX uplink and satellite TX downlink.
  */
 #define RADIO_DOWNLINK_SYNC_WORD_BITS  32
 #define RADIO_DOWNLINK_SYNC_WORD       { 0x93, 0x0B, 0x51, 0xDE, 0x00, 0x00, 0x00, 0x00 }

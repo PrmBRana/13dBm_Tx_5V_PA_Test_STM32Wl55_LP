@@ -1246,6 +1246,11 @@ void GS_Handle_Command_Line(const char *p)
     for (size_t i = 0; i < n; i++) u[i] = (char)toupper((unsigned char)p[i]);
     u[n] = '\0';
 
+    while (n > 0 && (u[n - 1] == ' ' || u[n - 1] == '\t' || u[n - 1] == '\r' || u[n - 1] == '\n')) {
+        u[--n] = '\0';
+    }
+    if (n == 0) return;
+
     /* HK1 */
     if (strcmp(u, "1") == 0 || strcmp(u, "HK") == 0 || strcmp(u, "HK1") == 0) {
         uart2_puts(">>> [UPLINK] HK1 request\r\n");
@@ -1335,7 +1340,8 @@ void GS_Handle_Command_Line(const char *p)
         SEND13(flash_cmd);
     }
     /* Ping */
-    else if (strcmp(u, "P") == 0 || strcmp(u, "PING") == 0) {
+    else if (strcmp(u, "P") == 0 || strcmp(u, "PING") == 0 ||
+             strcmp(u, "PING SATELLITE") == 0 || strcmp(u, "PING OBC") == 0) {
         uart2_puts(">>> [UPLINK] PING\r\n");
         SEND13(CMD_PING);
     }
@@ -1353,7 +1359,10 @@ void GS_Handle_Command_Line(const char *p)
         GS_Listen_CW_And_Packets(ms, 0);
     }
     /* Status */
-    else if (strcmp(u, "S") == 0) { GS_Print_Status(); }
+    else if (strcmp(u, "S") == 0 || strcmp(u, "STATUS") == 0 ||
+             strcmp(u, "STATE") == 0 || strcmp(u, "STAT") == 0) {
+        GS_Print_Status();
+    }
     else if (strcmp(u, "?") == 0 || strcmp(u, "HELP") == 0) { GS_Print_Help(); }
     /* Carrier / CW tone test */
     else if (strncmp(u, "CARRIER", 7) == 0 || strncmp(u, "CW ", 3) == 0 ||
@@ -1372,27 +1381,25 @@ void GS_Handle_Command_Line(const char *p)
         GS_StartRx();
     }
     /* RF pins debug */
-    else if (strcmp(u, "RF") == 0) { GS_Print_RF_Pins(); }
-    /* PA selection */
-    else if (strcmp(u, "PA LP") == 0) {
-        RadioApp_SetPaSelect(RFO_LP);
-        RadioApp_SetTxPower(14);
-        GS_SetRFSwitch(RBI_SWITCH_RFO_LP);
-        uart2_puts(">>> PA set to RFO_LP (+14 dBm) <<<\r\n");
+    else if (strcmp(u, "RF") == 0 || strcmp(u, "RFPINS") == 0 || strcmp(u, "PINS") == 0) {
+        GS_Print_RF_Pins();
     }
-    else if (strcmp(u, "PA HP") == 0) {
+    /* PA selection: GS is strictly LOCKED to RFO_HP (+22 dBm) */
+    else if (strcmp(u, "PA LP") == 0 || strcmp(u, "PA HP") == 0 || strcmp(u, "PA") == 0) {
         RadioApp_SetPaSelect(RFO_HP);
         RadioApp_SetTxPower(22);
         GS_SetRFSwitch(RBI_SWITCH_RFO_HP);
-        uart2_puts(">>> PA set to RFO_HP (+22 dBm, JC2) <<<\r\n");
+        uart2_puts(">>> [GS-PA] Ground Station LOCKED to RFO_HP (+22 dBm, Nucleo-WL55JC2 SMA) <<<\r\n");
     }
     /* TX power */
     else if (strncmp(u, "PWR ", 4) == 0 || strncmp(u, "POWER ", 6) == 0) {
         const char *arg = u;
         while (*arg && *arg != ' ') arg++;
         while (*arg == ' ') arg++;
-        RadioApp_SetTxPower((int8_t)atoi(arg));
-        uart2_printf(">>> TX Power: %+d dBm <<<\r\n", (int)RadioApp_GetTxPower());
+        int pwr = atoi(arg);
+        if (pwr > 22) pwr = 22;
+        RadioApp_SetTxPower((int8_t)pwr);
+        uart2_printf(">>> TX Power: %+d dBm (RFO_HP) <<<\r\n", (int)RadioApp_GetTxPower());
     }
     /* Auto-command */
     else if (strncmp(u, "AUTO ", 5) == 0) {
@@ -1406,10 +1413,12 @@ void GS_Handle_Command_Line(const char *p)
         uint16_t    hlen = 0;
         char byte_str[3] = {0};
         while (*hs && hlen < sizeof(s_hex_buf)) {
-            while (*hs == ' ') hs++;
+            while (*hs == ' ' || *hs == ',') hs++;
             if (!*hs) break;
+            if (*hs == '0' && (*(hs + 1) == 'x' || *(hs + 1) == 'X')) hs += 2;
+            if (!isxdigit((int)*hs)) break;
             byte_str[0] = *hs++;
-            byte_str[1] = *hs ? *hs++ : '0';
+            byte_str[1] = isxdigit((int)*hs) ? *hs++ : '0';
             s_hex_buf[hlen++] = (uint8_t)strtoul(byte_str, NULL, 16);
         }
         if ((hlen == 13 || hlen == 8) && s_hex_buf[0] == 0x53) {
@@ -1418,8 +1427,11 @@ void GS_Handle_Command_Line(const char *p)
         } else if (hlen == 1 && (s_hex_buf[0] == 0x01 || s_hex_buf[0] == 0x53)) {
             uart2_printf(">>> [UPLINK] Transmitting Burst Request (0x%02X)\r\n", s_hex_buf[0]);
             GS_Send_Burst_Packet(s_hex_buf, hlen, GS_SEND_COUNT);
+        } else if (hlen > 0 && s_hex_buf[0] == 0x53) {
+            uart2_printf(">>> [UPLINK] Transmitting %u-byte Telecommand (0x%02X)\r\n", hlen, s_hex_buf[0]);
+            GS_Send_Burst_Packet(s_hex_buf, hlen, GS_SEND_COUNT);
         } else {
-            uart2_printf("!!! [BLOCKED] Payload of %u bytes is NOT a valid Telecommand. Communication is restricted to valid Telecommands (13B starting with 0x53) only!\r\n", hlen);
+            uart2_printf("!!! [BLOCKED] Payload of %u bytes is NOT a valid Telecommand. Communication is restricted to valid Telecommands (starting with 0x53) only!\r\n", hlen);
         }
     }
     /* Check for direct hex telecommand string without 'HEX ' prefix, e.g. "53 04 CC 5E BE..." */
@@ -1428,8 +1440,9 @@ void GS_Handle_Command_Line(const char *p)
         uint16_t hlen = 0;
         char byte_str[3] = {0};
         while (*hs && hlen < sizeof(s_hex_buf)) {
-            while (*hs == ' ') hs++;
+            while (*hs == ' ' || *hs == ',') hs++;
             if (!*hs) break;
+            if (*hs == '0' && (*(hs + 1) == 'x' || *(hs + 1) == 'X')) hs += 2;
             if (!isxdigit((int)*hs)) { hlen = 0; break; }
             byte_str[0] = *hs++;
             if (!isxdigit((int)*hs)) { hlen = 0; break; }
@@ -1438,6 +1451,9 @@ void GS_Handle_Command_Line(const char *p)
         }
         if ((hlen == 13 || hlen == 8) && s_hex_buf[0] == 0x53) {
             uart2_printf(">>> [UPLINK] Transmitting %u-byte Telecommand (Opcode 0x%02X)\r\n", hlen, s_hex_buf[1]);
+            GS_Send_Burst_Packet(s_hex_buf, hlen, GS_SEND_COUNT);
+        } else if (hlen > 0 && s_hex_buf[0] == 0x53) {
+            uart2_printf(">>> [UPLINK] Transmitting %u-byte Telecommand (0x%02X)\r\n", hlen, s_hex_buf[0]);
             GS_Send_Burst_Packet(s_hex_buf, hlen, GS_SEND_COUNT);
         } else {
             uart2_printf("!!! [BLOCKED] \"%s\" is not a valid Telecommand. AX.25 G3RUH communication strictly allows only valid Telecommands (13B starting with 0x53)!\r\n", p);

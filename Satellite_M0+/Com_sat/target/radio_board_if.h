@@ -90,6 +90,15 @@ extern "C" {
 #define FE_CTRL2_PIN        GPIO_PIN_5    /* PC5: RF Switch Front-End Control 2 (FE_CTRL2: TX=1, RX=0) */
 #define FE_CTRL2_PORT       GPIOC
 
+/* External watchdog input (PB8 / WD_WDL_OBC). Left floating, it picks up RF
+ * from the 5V PA during GMSK, the watchdog starts counting and resets the
+ * board. Driven and toggled from SysTick_Handler once RBI_Init() has run. */
+#define EXT_WDT_WDI_PIN     GPIO_PIN_8
+#define EXT_WDT_WDI_PORT    GPIOB
+#define EXT_WDT_KICK_MS     50U
+
+extern volatile uint8_t g_ext_wdt_armed;
+
 /* Compatibility aliases */
 #define RF_SW_VEN_PIN       FE_CTRL1_PIN
 #define RF_SW_VEN_PORT      FE_CTRL1_PORT

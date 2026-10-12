@@ -34,6 +34,9 @@
 #include "radio_driver.h"
 #include "mw_log_conf.h"
 #include "config.h"
+#include "radio_board_if.h"
+
+extern bool Satellite_GetDCDCHold(void);
 
 /* External variables ---------------------------------------------------------*/
 /*!
@@ -802,6 +805,15 @@ void SUBGRF_SetPacketParams( PacketParams_t *packetParams )
             SUBGRF_SetCrcPolynomial( CRC_POLYNOMIAL_CCITT );
             crcVal = RADIO_CRC_2_BYTES_INV;
         }
+        else if( packetParams->Params.Gfsk.CrcLength == RADIO_CRC_OFF )
+        {
+            /* Force the SX126x silicon's actual "CRC disabled" code
+               (datasheet PacketParam7 = 0x00) instead of trusting whatever
+               numeric value RADIO_CRC_OFF (0x01) resolves to in this driver port.
+               Without this, 0x01 enables 1-byte CRC in silicon, rejecting
+               every incoming uplink frame as IRQ_CRC_ERROR. */
+            crcVal = 0x00;
+        }
         else
         {
             crcVal = packetParams->Params.Gfsk.CrcLength;
@@ -1035,8 +1047,16 @@ void SUBGRF_SetSwitch( uint8_t paSelect, RFState_t rxtx )
     {
         if (paSelect == RFO_LP)
         {
-            state = RBI_SWITCH_RFO_LP;
-            Radio_SMPS_Set(SMPS_DRIVE_SETTING_MAX);
+            /* Route according to active TX switch configuration */
+            if (RBI_GetTxSwitchConfig() == RBI_SWITCH_RFO_LP5V)
+            {
+                state = RBI_SWITCH_RFO_LP5V;
+            }
+            else
+            {
+                state = RBI_SWITCH_RFO_LP;
+                Radio_SMPS_Set(SMPS_DRIVE_SETTING_MAX);
+            }
         }
         if (paSelect == RFO_HP)
         {

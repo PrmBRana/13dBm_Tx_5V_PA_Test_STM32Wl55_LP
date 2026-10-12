@@ -532,7 +532,7 @@ void GS_Handle_Command_Line(const char *p)
         uart2_puts(">>> [UPLINK] BURST REQUEST (0x01)\r\n");
         GS_Send_Burst_Packet(&burst_cmd, 1, GS_SEND_COUNT);
     }
-    else if (strcmp(u, "S") == 0) {
+    else if (strcmp(u, "S") == 0 || strcmp(u, "STATUS") == 0 || strcmp(u, "STATE") == 0) {
         GS_Print_Status();
     }
     else if (strcmp(u, "?") == 0 || strcmp(u, "HELP") == 0) {
@@ -550,20 +550,14 @@ void GS_Handle_Command_Line(const char *p)
         RadioApp_TransmitCarrier(s_config.radio.txFrequency, sec);
         GS_Radio_Idle();
     }
-    else if (strcmp(u, "RF") == 0) {
+    else if (strcmp(u, "RF") == 0 || strcmp(u, "RFPINS") == 0) {
         GS_Print_RF_Pins();
     }
-    else if (strcmp(u, "PA LP") == 0) {
-        RadioApp_SetPaSelect(RFO_LP);
-        RadioApp_SetTxPower(14);
-        GS_SetRFSwitch(RBI_SWITCH_RFO_LP);
-        uart2_puts(">>> PA set to RFO_LP (+14 dBm) <<<\r\n");
-    }
-    else if (strcmp(u, "PA HP") == 0) {
+    else if (strcmp(u, "PA LP") == 0 || strcmp(u, "PA HP") == 0 || strcmp(u, "PA") == 0) {
         RadioApp_SetPaSelect(RFO_HP);
         RadioApp_SetTxPower(22);
         GS_SetRFSwitch(RBI_SWITCH_RFO_HP);
-        uart2_puts(">>> PA set to RFO_HP (+22 dBm, JC2 only) <<<\r\n");
+        uart2_puts(">>> [GS-PA] Ground Station LOCKED to RFO_HP (+22 dBm, Nucleo-WL55JC2 SMA) <<<\r\n");
     }
     else if (strncmp(u, "PWR ", 4) == 0 || strncmp(u, "POWER ", 6) == 0)
     {

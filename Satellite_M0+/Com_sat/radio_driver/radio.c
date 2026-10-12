@@ -722,7 +722,7 @@ static void RadioInit( RadioEvents_t *events )
 
     SUBGRF_SetRegulatorMode( );
 
-    SUBGRF_SetBufferBaseAddress( 0x00, 0x00 );
+    SUBGRF_SetBufferBaseAddress( 0x00, 0x80 );
     SUBGRF_SetTxParams( RFO_LP, 0, RADIO_RAMP_200_US );
     SUBGRF_SetDioIrqParams( IRQ_RADIO_ALL, IRQ_RADIO_ALL, IRQ_RADIO_NONE, IRQ_RADIO_NONE );
 
@@ -960,7 +960,7 @@ static void RadioSetRxConfig( RadioModems_t modem, uint32_t bandwidth,
             {
                 SubgRf.PacketParams.Params.Gfsk.CrcLength = RADIO_CRC_OFF;
             }
-            SubgRf.PacketParams.Params.Gfsk.DcFree = RADIO_DC_FREEWHITENING;
+            SubgRf.PacketParams.Params.Gfsk.DcFree = RADIO_DC_FREE_OFF;
 
             RadioStandby( );
             RadioSetModem( MODEM_FSK );
@@ -1066,7 +1066,7 @@ static void RadioSetTxConfig( RadioModems_t modem, int8_t power, uint32_t fdev,
             SubgRf.ModulationParams.PacketType = PACKET_TYPE_GFSK;
             SubgRf.ModulationParams.Params.Gfsk.BitRate = datarate;
 
-            SubgRf.ModulationParams.Params.Gfsk.ModulationShaping = MOD_SHAPING_G_BT_1;
+            SubgRf.ModulationParams.Params.Gfsk.ModulationShaping = MOD_SHAPING_G_BT_05;
             SubgRf.ModulationParams.Params.Gfsk.Bandwidth = SUBGRF_GetFskBandwidthRegValue( bandwidth );
             SubgRf.ModulationParams.Params.Gfsk.Fdev = fdev;
 
@@ -1085,7 +1085,7 @@ static void RadioSetTxConfig( RadioModems_t modem, int8_t power, uint32_t fdev,
             {
                 SubgRf.PacketParams.Params.Gfsk.CrcLength = RADIO_CRC_OFF;
             }
-            SubgRf.PacketParams.Params.Gfsk.DcFree = RADIO_DC_FREEWHITENING;
+            SubgRf.PacketParams.Params.Gfsk.DcFree = RADIO_DC_FREE_OFF;
 
             RadioStandby( );
             RadioSetModem(  MODEM_FSK  );
@@ -1689,8 +1689,22 @@ static void RadioOnRxTimeoutProcess( void )
     }
 }
 
+volatile uint32_t g_stat_irq_preamble = 0;
+volatile uint32_t g_stat_irq_sync     = 0;
+volatile uint32_t g_stat_irq_rx_done  = 0;
+volatile uint32_t g_stat_irq_crc_err  = 0;
+volatile uint32_t g_stat_irq_timeout  = 0;
+volatile uint32_t g_stat_last_raw_irq = 0;
+
 static void RadioOnDioIrq( RadioIrqMasks_t radioIrq )
 {
+    g_stat_last_raw_irq = (uint32_t)radioIrq;
+    if (radioIrq & IRQ_PREAMBLE_DETECTED) g_stat_irq_preamble++;
+    if (radioIrq & IRQ_SYNCWORD_VALID)    g_stat_irq_sync++;
+    if (radioIrq & IRQ_RX_DONE)           g_stat_irq_rx_done++;
+    if (radioIrq & IRQ_CRC_ERROR)         g_stat_irq_crc_err++;
+    if (radioIrq & IRQ_RX_TX_TIMEOUT)     g_stat_irq_timeout++;
+
     SubgRf.RadioIrq = radioIrq;
 
     RADIO_IRQ_PROCESS();
@@ -1700,6 +1714,7 @@ static void RadioIrqProcess( void )
 {
     uint8_t size = 0;
     int32_t cfo = 0;
+    SUBGRF_ClearIrqStatus( SubgRf.RadioIrq );
 
     switch( SubgRf.RadioIrq )
     {

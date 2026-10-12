@@ -868,10 +868,33 @@ bool Protocol_ExtractFrame(
                                         byteLen + 2U);
 
                                 /*
-                                 * Return the extracted HDLC frame so upper layer
-                                 * can decode, display fields, and validate FCS.
+                                 * Verify CRC with either method 1 or method 2.
                                  */
-                                return true;
+                                if (AX25_VerifyCRC_Method1(
+                                        frameOut,
+                                        *frameOutLen) ||
+                                    AX25_VerifyCRC_Method2(
+                                        frameOut,
+                                        *frameOutLen,
+                                        NULL, NULL, NULL))
+                                {
+                                    return true;
+                                }
+
+                                /* HDLC destuff can sometimes leave 1 trailing byte before the closing flag */
+                                if (*frameOutLen > 19U)
+                                {
+                                    uint16_t n = (uint16_t)(*frameOutLen - 1U);
+                                    uint8_t saved = frameOut[n - 1U];
+                                    frameOut[n - 1U] = AX25_FLAG;
+                                    if (AX25_VerifyCRC_Method1(frameOut, n) ||
+                                        AX25_VerifyCRC_Method2(frameOut, n, NULL, NULL, NULL))
+                                    {
+                                        *frameOutLen = n;
+                                        return true;
+                                    }
+                                    frameOut[n - 1U] = saved;
+                                }
                             }
                         }
                     }

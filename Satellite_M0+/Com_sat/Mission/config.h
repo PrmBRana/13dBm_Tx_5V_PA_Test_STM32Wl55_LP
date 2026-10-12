@@ -55,15 +55,19 @@ extern "C" {
 
 /*
  * GMSK ACK and data downlink drive into the 5V PA (PC3 + PA0 boost).
- * +14 dBm (duty 0x04) is about 27 dBm at the antenna and browns the board
- * out as soon as a command starts the ACK. +10 dBm is the drive that stays
- * up and still decodes.
+ * +14 dBm internal drive with paDutyCycle 0x04 produces +27 dBm (500 mW)
+ * at the antenna. Supported by external power supply (>= 1.5A).
  */
-#define RADIO_GMSK_TX_POWER_DBM        10
+#define RADIO_GMSK_TX_POWER_DBM        14
+
+/* 5V LP power-up: settle the 5V DC/DC (PA0) before the 5V PA (PC3) is
+ * enabled, and bias the 5V PA before the RF switch goes to TX. */
+#define SAT_5V_DCDC_SETTLE_MS          30
+#define SAT_5V_PA_BIAS_MS              10
 
 /*
- * SX126x RFO_LP paDutyCycle used only if GMSK drive is raised back to +14 dBm.
- * At RADIO_GMSK_TX_POWER_DBM (10) the driver selects duty 0x02 instead.
+ * SX126x RFO_LP paDutyCycle used at +14 dBm GMSK drive.
+ * At 10 dBm the driver selects duty 0x02 instead.
  * Keep the 5V PA biased for the whole GMSK burst (no PC3 off / PC2 on between
  * packets) so a later power increase does not cause an inrush brownout.
  */

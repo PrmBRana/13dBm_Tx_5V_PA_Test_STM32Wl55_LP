@@ -131,6 +131,17 @@ int32_t RBI_Init(void)
     HAL_GPIO_WritePin(DCDC_5V_EN_PORT, DCDC_5V_EN_PIN, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(GPIOC, AMP_3V3_EN_PIN | AMP_5V_EN_PIN | FE_CTRL1_PIN | FE_CTRL2_PIN, GPIO_PIN_RESET);
 
+    /* External watchdog WDI (PB8): push-pull output, kicked from SysTick */
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    RCC->C2AHB2ENR |= RCC_C2AHB2ENR_GPIOBEN;
+    GPIO_InitStruct.Pin   = EXT_WDT_WDI_PIN;
+    GPIO_InitStruct.Mode  = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull  = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(EXT_WDT_WDI_PORT, &GPIO_InitStruct);
+    HAL_GPIO_WritePin(EXT_WDT_WDI_PORT, EXT_WDT_WDI_PIN, GPIO_PIN_RESET);
+    g_ext_wdt_armed = 1;
+
     return 0;
 }
 
@@ -173,10 +184,10 @@ int32_t RBI_ConfigRFSwitch(RBI_Switch_TypeDef Config)
     case RBI_SWITCH_RFO_LP5V:
         /*
          * TRANSMIT MODE (5V PA for GMSK). Never overlap 3.3V and 5V PAs:
-         * 1. 3.3V PA OFF first
-         * 2. 5V DC/DC ON (PA0) and settle
-         * 3. 5V PA ON (PC3)
-         * 4. RF switch TX last
+         * 1. 3.3V PA OFF first (PC2 = 0)
+         * 2. 5V DC/DC ON (PA0 = 1) and settle
+         * 3. 5V PA ON (PC3 = 1)
+         * 4. RF switch TX last (FE_CTRL1 = 0, FE_CTRL2 = 1)
          */
         s_tx_switch_config = RBI_SWITCH_RFO_LP5V;
 
@@ -233,21 +244,20 @@ int32_t RBI_ConfigRFSwitch(RBI_Switch_TypeDef Config)
          * RECEIVE MODE:
          * 1. Disable 5V External Power Amplifier (PC3 = 0)
          * 2. Disable 5V DC/DC Converter (PA0 = 0) unless DCDC hold is active
-         * 3. 3.3V External Power Amplifier back ON (PC2 = 1): it is always ON
-         *    except while the 5V PA transmits GMSK
+         * 3. 3.3V External Power Amplifier is strictly OFF (PC2 = 0) - only for CW!
          * 4. RF Switch -> RX Path (FE_CTRL1 = 1, FE_CTRL2 = 0)
+         * 5. Default next TX config to RBI_SWITCH_RFO_LP (3.3V PA for CW)
          *
-         * During a GMSK downlink (DCDC hold) keep the 5V PA biased. Dropping
-         * PC3 and turning PC2 on mid-session brown-outs the board.
+         * During a GMSK downlink (DCDC hold) keep the 5V PA biased.
          */
         if (Satellite_GetDCDCHold())
         {
             break;
         }
+        s_tx_switch_config = RBI_SWITCH_RFO_LP;
         HAL_GPIO_WritePin(AMP_5V_EN_PORT, AMP_5V_EN_PIN, GPIO_PIN_RESET);
         HAL_GPIO_WritePin(DCDC_5V_EN_PORT, DCDC_5V_EN_PIN, GPIO_PIN_RESET);
-        HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN,
-                          s_pa_enabled ? GPIO_PIN_SET : GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_RESET);
         HAL_GPIO_WritePin(FE_CTRL1_PORT, FE_CTRL1_PIN, GPIO_PIN_SET);
         HAL_GPIO_WritePin(FE_CTRL2_PORT, FE_CTRL2_PIN, GPIO_PIN_RESET);
 
@@ -258,9 +268,15 @@ int32_t RBI_ConfigRFSwitch(RBI_Switch_TypeDef Config)
     case RBI_SWITCH_OFF:
     default:
         /*
-         * STANDBY / OFF:
-         * Deassert 5V DC/DC, 5V PA, 3.3V PA, and both RF switch control pins
+         * STANDBY / OFF. During a GMSK downlink the 5V PA must stay biased:
+         * Radio.Sleep / SUBGRF_SetSleep also land here and used to drop PC3
+         * mid-burst, which put GMSK onto the 3.3V PA (same ~24.8 dBm as CW).
          */
+        if (Satellite_GetDCDCHold())
+        {
+            break;
+        }
+        s_tx_switch_config = RBI_SWITCH_RFO_LP;
         HAL_GPIO_WritePin(DCDC_5V_EN_PORT, DCDC_5V_EN_PIN, GPIO_PIN_RESET);
         HAL_GPIO_WritePin(AMP_5V_EN_PORT, AMP_5V_EN_PIN, GPIO_PIN_RESET);
         HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_RESET);

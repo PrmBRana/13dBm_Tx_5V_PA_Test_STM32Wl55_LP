@@ -67,6 +67,8 @@
 #include "Sring_buffer.h"
 #include "camera_dummy_image.h"
 #include <termios.h>
+#include <poll.h>
+#include <time.h>
 
 #include <pthread.h>
 #include <sched.h>
@@ -1284,6 +1286,20 @@ static bool check_camera_data_available(void)
 #define CAM_FLASH_STORAGE_PATH  "/mnt/camera/capture_01.raw"
 #define CAM_FLASH_STORAGE_PATH2 "/mnt/camera/capture_02.raw"
 
+/* Camera answers 0xCA with Photo 1 SOI (FFD8) within 10 s, and then Photo 2
+ * SOI (FFD8) within 10 s after Photo 1 completes. */
+#define CAM_SOI_WAIT_MS         10000
+#define CAM_IDLE_TIMEOUT_MS     5000
+#define CAM_TOTAL_TIMEOUT_MS    35000
+
+static uint32_t cam_elapsed_ms(const struct timespec *from)
+{
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  return (uint32_t)((now.tv_sec - from->tv_sec) * 1000 +
+                    (now.tv_nsec - from->tv_nsec) / 1000000);
+}
+
 /****************************************************************************
  * Name: camera_capture_via_uart2
  *
@@ -1370,16 +1386,53 @@ static size_t camera_capture_via_uart2(void)
       printf("[OBC_MAIN] [CAMERA UART2] Listening for Photo 1 (0xFFD8 ... 0xFFD9) -> %s\n",
              CAM_FLASH_STORAGE_PATH);
 
-      /* Up to 15 seconds total window for both photos, with 4.5s idle timeout */
-      int total_timeout_ms = 15000;
-      int idle_timeout_ms = 4500;
+      /* read() blocks on this UART, so wait with poll() to keep the timeouts live */
+      struct pollfd pfd;
+      pfd.fd = fd;
+      pfd.events = POLLIN;
 
-      while (total_timeout_ms > 0 && idle_timeout_ms > 0 && current_photo <= 2)
+      struct timespec t_total_start;
+      struct timespec t_photo_start;
+      struct timespec t_last;
+      clock_gettime(CLOCK_MONOTONIC, &t_total_start);
+      t_photo_start = t_total_start;
+      t_last = t_total_start;
+
+      while (current_photo <= 2)
         {
+          /* Overall session timeout (35s) */
+          if (cam_elapsed_ms(&t_total_start) >= CAM_TOTAL_TIMEOUT_MS)
+            {
+              printf("[OBC_MAIN] [CAMERA UART2] Timeout: %d ms total capture window elapsed\n",
+                     CAM_TOTAL_TIMEOUT_MS);
+              break;
+            }
+
+          /* Waiting for SOI (0xFF 0xD8): 10 seconds timeout for the current photo */
+          if (!in_photo && cam_elapsed_ms(&t_photo_start) >= CAM_SOI_WAIT_MS)
+            {
+              printf("[OBC_MAIN] [CAMERA UART2] Timeout: no JPEG SOI (0xFFD8) within %d ms for Photo %d\n",
+                     CAM_SOI_WAIT_MS, current_photo);
+              break;
+            }
+
+          /* Inside photo data stream: silence timeout if camera stalls */
+          if (in_photo && cam_elapsed_ms(&t_last) >= CAM_IDLE_TIMEOUT_MS)
+            {
+              printf("[OBC_MAIN] [CAMERA UART2] Timeout: camera silent for %d ms during Photo %d\n",
+                     CAM_IDLE_TIMEOUT_MS, current_photo);
+              break;
+            }
+
+          if (poll(&pfd, 1, 100) <= 0 || (pfd.revents & POLLIN) == 0)
+            {
+              continue;
+            }
+
           ssize_t n = read(fd, rx_buf, sizeof(rx_buf));
           if (n > 0)
             {
-              idle_timeout_ms = 4500; /* Reset idle timeout on data receipt */
+              clock_gettime(CLOCK_MONOTONIC, &t_last);
 
               for (ssize_t i = 0; i < n; i++)
                 {
@@ -1404,8 +1457,8 @@ static size_t camera_capture_via_uart2(void)
                               write_buf[write_buf_len++] = 0xD8;
                             }
 
-                          printf("[OBC_MAIN] [CAMERA UART2] >>> Photo %d: JPEG SOI (0xFFD8) DETECTED! Opening %s <<<\n",
-                                 current_photo, target_file);
+                          printf("[OBC_MAIN] [CAMERA UART2] >>> Photo %d: JPEG SOI (0xFFD8) DETECTED (waited %lu ms)! Opening %s <<<\n",
+                                 current_photo, (unsigned long)cam_elapsed_ms(&t_photo_start), target_file);
                         }
                     }
                   else
@@ -1428,7 +1481,7 @@ static size_t camera_capture_via_uart2(void)
                         {
                           in_photo = false;
 
-                          /* Flush write buffer */
+                          /* Flush write buffer and save photo file */
                           if (out_fd >= 0)
                             {
                               if (write_buf_len > 0)
@@ -1441,15 +1494,19 @@ static size_t camera_capture_via_uart2(void)
                               out_fd = -1;
                             }
 
-                          printf("[OBC_MAIN] [CAMERA UART2] >>> Photo %d: JPEG EOI (0xFFD9) DETECTED! Total: %u Bytes <<<\n",
+                          printf("[OBC_MAIN] [CAMERA UART2] >>> Photo %d: JPEG EOI (0xFFD9) DETECTED! Total: %u Bytes saved <<<\n",
                                  current_photo, (unsigned)current_captured_len);
 
                           if (current_photo == 1)
                             {
                               photo1_len = current_captured_len;
                               current_photo = 2;
-                              printf("[OBC_MAIN] [CAMERA UART2] Listening for Photo 2 (0xFFD8 ... 0xFFD9) -> %s\n",
-                                     CAM_FLASH_STORAGE_PATH2);
+                              prev_b = 0;
+                              /* Restart dedicated 10-second timer for Photo 2 SOI! */
+                              clock_gettime(CLOCK_MONOTONIC, &t_photo_start);
+                              t_last = t_photo_start;
+                              printf("[OBC_MAIN] [CAMERA UART2] Photo 1 stored in flash! Waiting up to %d ms for Photo 2 SOI (0xFFD8) -> %s\n",
+                                     CAM_SOI_WAIT_MS, CAM_FLASH_STORAGE_PATH2);
                             }
                           else
                             {
@@ -1462,12 +1519,6 @@ static size_t camera_capture_via_uart2(void)
 
                   prev_b = b;
                 }
-            }
-          else
-            {
-              usleep(2000); /* 2 ms yield */
-              total_timeout_ms -= 2;
-              idle_timeout_ms -= 2;
             }
         }
 

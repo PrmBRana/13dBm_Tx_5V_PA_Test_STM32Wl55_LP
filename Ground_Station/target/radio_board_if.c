@@ -112,22 +112,14 @@ int32_t RBI_ConfigRFSwitch(RBI_Switch_TypeDef Config)
     switch (Config)
     {
     case RBI_SWITCH_RFO_HP:
+    case RBI_SWITCH_RFO_LP:
         /* Ground Station High Power TX (+22 dBm) to SMA:
+         * Always route through RFO_HP on Nucleo-WL55JC2 (RFO_LP is not connected to SMA).
          * PA8 = External PA Enable ON
          * PC3 = 1 (CTRL3), PC4 = 0 (CTRL1), PC5 = 1 (CTRL2) */
         HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
         HAL_GPIO_WritePin(GPIOC, GPIO_PIN_3, GPIO_PIN_SET);
         HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_RESET);
-        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, GPIO_PIN_SET);
-        break;
-
-    case RBI_SWITCH_RFO_LP:
-        /* Ground Station Low Power TX (+14 dBm) to SMA:
-         * PA8 = External PA Enable ON
-         * PC3 = 1 (CTRL3), PC4 = 1 (CTRL1), PC5 = 1 (CTRL2) */
-        HAL_GPIO_WritePin(GPIOA, GPIO_PIN_8, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_3, GPIO_PIN_SET);
-        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_4, GPIO_PIN_SET);
         HAL_GPIO_WritePin(GPIOC, GPIO_PIN_5, GPIO_PIN_SET);
         break;
 

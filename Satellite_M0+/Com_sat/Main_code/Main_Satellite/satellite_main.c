@@ -49,6 +49,9 @@ const RadioConfig_t SatelliteProfile = {
 #define SAT_CMD_HOLD_TIME_MS    (60UL * 1000UL)  /* 60 seconds minimum hold after command */
 /* Timeout for M4 to send first flash/camera chunk via ring buffer */
 #define SAT_M4_RESPONSE_TIMEOUT_MS  (5000UL)     /* 5 seconds max wait for M4 ack */
+/* Real camera: M4 waits up to 10 s for Photo 1 FFD8 and 10 s for Photo 2 FFD8
+ * (CAM_TOTAL_TIMEOUT_MS = 35 s in OBC_main), so this must stay longer. */
+#define SAT_CAM_CAPTURE_WAIT_MS     (38000UL)
 
 /* Strict command validation:
  *   0 = accept ONLY a standard AX.25 FCS (CRC-16/X.25, residue 0xF0B8)
@@ -474,7 +477,8 @@ static bool Radio_Send_And_Wait(uint8_t *buffer, uint16_t size, uint32_t timeout
     const bool pa5v_on =
         (HAL_GPIO_ReadPin(AMP_5V_EN_PORT, AMP_5V_EN_PIN) == GPIO_PIN_SET) &&
         (HAL_GPIO_ReadPin(DCDC_5V_EN_PORT, DCDC_5V_EN_PIN) == GPIO_PIN_SET);
-    if (!pa5v_on) {
+    const bool pa3v3_on = (HAL_GPIO_ReadPin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN) == GPIO_PIN_SET);
+    if (!pa5v_on && !pa3v3_on) {
         Satellite_GMSK_Prepare();
     }
     tx_busy = 1;
@@ -488,7 +492,7 @@ static bool Radio_Send_And_Wait(uint8_t *buffer, uint16_t size, uint32_t timeout
             if (!Satellite_GetDCDCHold()) {
                 HAL_GPIO_WritePin(AMP_5V_EN_PORT, AMP_5V_EN_PIN, GPIO_PIN_RESET);
                 HAL_GPIO_WritePin(DCDC_5V_EN_PORT, DCDC_5V_EN_PIN, GPIO_PIN_RESET);
-                HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_SET);
+                HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_RESET);
                 Satellite_SetRFSwitch(RBI_SWITCH_RX);
             }
             return false;
@@ -498,10 +502,10 @@ static bool Radio_Send_And_Wait(uint8_t *buffer, uint16_t size, uint32_t timeout
     if (Satellite_GetDCDCHold()) {
         return true;
     }
-    /* Deassert 5V PA (PC3) and 5V DC/DC (PA0); 3.3V PA (PC2) back ON; return RF switch to RX */
+    /* Deassert 5V PA (PC3) and 5V DC/DC (PA0); ensure 3.3V PA (PC2) is OFF in RX; return RF switch to RX */
     HAL_GPIO_WritePin(AMP_5V_EN_PORT, AMP_5V_EN_PIN, GPIO_PIN_RESET);
     HAL_GPIO_WritePin(DCDC_5V_EN_PORT, DCDC_5V_EN_PIN, GPIO_PIN_RESET);
-    HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_RESET);
     Satellite_SetRFSwitch(RBI_SWITCH_RX);
     return true;
 }
@@ -540,6 +544,9 @@ static void Transmit_Burst_50(void) {
     uart1_printf(">>> [TX ON-AIR G3RUH SCRAMBLED BYTES (%u Bytes)] <<<\r\n", frame_size);
     Print_Hex_Bytes(frame_buffer, frame_size);
 
+    Satellite_SetDCDCHold(true);
+    Satellite_GMSK_Prepare();
+
     uint32_t sent_ok = 0, sent_timeout = 0;
     for (int i = 0; i < BURST_PACKET_COUNT; i++) {
         bool ok = Radio_Send_And_Wait(frame_buffer, frame_size, TX_TIMEOUT_MS);
@@ -549,6 +556,8 @@ static void Transmit_Burst_50(void) {
         uart1_puts(pkt_msg);
         CPU2_Delay_Ms(100);
     }
+
+    Satellite_GMSK_Release();
 
     char done_msg[96];
     snprintf(done_msg, sizeof(done_msg), "BURST COMPLETE (%lu/%d sent cleanly, %lu timed out)\r\n", (unsigned long)sent_ok, BURST_PACKET_COUNT, (unsigned long)sent_timeout);
@@ -578,8 +587,8 @@ int main(void) {
 
     uart1_puts("\r\n======================================================================\r\n");
     uart1_puts("     STM32WL55 AX.25 + G3RUH 3-STATE MISSION EXECUTIVE READY          \r\n");
-    uart1_puts("     FW-ID: SAT-G3RUH-UPLINK7                                         \r\n");
-    uart1_puts("     RX: 437.375 MHz | raw then decode then validate | 13B 0x53 trim  \r\n");
+    uart1_puts("     FW-ID: SAT-G3RUH-UPLINK8                                         \r\n");
+    uart1_puts("     RX: 437.375 MHz | preamble+sync 93 0B 51 DE | 13B 0x53 trim     \r\n");
     uart1_puts("     CYCLE: CW1 -> LISTEN -> CW2 -> LISTEN                            \r\n");
     uart1_puts("======================================================================\r\n");
 
@@ -741,7 +750,7 @@ int main(void) {
                                      (unsigned long)(rem_hold / 1000UL));
                     } else if (elapsed < SAT_LISTEN_DURATION_MS) {
                         uint32_t rem = SAT_LISTEN_DURATION_MS - elapsed;
-                        uart1_printf(">>> [M0+ RX] FW-ID SAT-G3RUH-UPLINK7 | raw then decode then validate | %lu s before %s <<<\r\n",
+                        uart1_printf(">>> [M0+ RX] FW-ID SAT-G3RUH-UPLINK8 | preamble+sync 93 0B 51 DE | %lu s before %s <<<\r\n",
                                      (unsigned long)((rem + 999) / 1000UL),
                                      (s_cw_step == 1) ? "CW2" : "CW1");
                     }
@@ -800,8 +809,10 @@ int main(void) {
                     if (!decode_ok) {
                         memcpy(s_sat_prev_rx, s_rx_raw, raw_len);
                         s_sat_prev_len = raw_len;
-                        uart1_puts(">>> [DECODE FAILED] no valid G3RUH/AX.25 frame (stay in continuous RX) <<<\r\n");
-                        /* Do not RadioApp_StartRx() here — re-arming drops the next GS packet. */
+                        uart1_puts(">>> [DECODE FAILED] no valid G3RUH/AX.25 frame — re-arming RX for next GS packet <<<\r\n");
+                        /* SX126x continuous GFSK often stops matching after the first
+                         * RxDone. Re-arm so the second GS uplink packet can still land. */
+                        RadioApp_StartRx();
                         break;
                     }
 
@@ -819,7 +830,13 @@ int main(void) {
                     uart1_puts(">>> [STEP 3: VALIDATE AX.25] Check Headers, Callsigns & FCS/CRC <<<\r\n");
                     const char *why_invalid = "unknown";
                     if (!Sat_Validate_Frame(s_rx_decoded, &decoded_len, &why_invalid)) {
-                        uart1_printf(" [VALIDATE FAILED] Frame rejected: %s\r\n", why_invalid);
+                        if (last_rx_rssi <= -115) {
+                            uart1_printf(" [VALIDATE FAILED] Frame rejected: %s (Background Noise: RSSI=%d dBm, not a Ground Station signal)\r\n",
+                                         why_invalid, (int)last_rx_rssi);
+                        } else {
+                            uart1_printf(" [VALIDATE FAILED] Frame rejected: %s (RSSI=%d dBm)\r\n",
+                                         why_invalid, (int)last_rx_rssi);
+                        }
                         RadioApp_StartRx();
                         break;
                     }
@@ -1114,9 +1131,11 @@ int main(void) {
                         } else if (is_dummy_cam_cmd) {
                             uint16_t cam_pkts = 69;
                             uart1_printf("\r\n>>> [M0+ DOWNLINK] DUMMY CAMERA TEST (%u CHUNKS from camera_dummy_image.h via M4) <<<\r\n", cam_pkts);
-                            /* M4 owns g_dummy_camera_image[] — forward first so the ring fills during ACK. */
-                            Sat_Forward_Command_To_M4(payload_ptr, payload_len);
+                            /* 1. Send ACK first in GMSK */
                             Satellite_Send_Ack_Accepted(SAT_MISSION_CAM_RGB);
+
+                            /* 2. Forward to M4 after ACK finishes */
+                            Sat_Forward_Command_To_M4(payload_ptr, payload_len);
                             {
                                 uint32_t wait_start = HAL_GetTick();
                                 while (flash_data_empty() &&
@@ -1155,6 +1174,10 @@ int main(void) {
                             /* 1. Send ACK Accepted to Ground Station (twice in GMSK) */
                             Satellite_Send_Ack_Accepted(SAT_MISSION_CAM_RGB);
 
+                            /* The M4 drives PA0 (5V DC/DC) as camera power during the
+                             * capture, so the 5V PA must not stay biased on it. */
+                            Satellite_GMSK_Release();
+
                             /* 2. Forward command to M4 to capture photos */
                             Sat_Forward_Command_To_M4(payload_ptr, payload_len);
 
@@ -1164,7 +1187,7 @@ int main(void) {
                             {
                                 uint32_t wait_start = HAL_GetTick();
                                 bool m4_captured = false;
-                                while ((HAL_GetTick() - wait_start) < 12000UL) {
+                                while ((HAL_GetTick() - wait_start) < SAT_CAM_CAPTURE_WAIT_MS) {
                                     if (ipcc_m0_received(IPCC_CH_COMMAND)) {
                                         ipcc_m0_clear(IPCC_CH_COMMAND);
                                         m4_captured = true;
@@ -1258,8 +1281,8 @@ int main(void) {
                     } else if (strstr(ascii_cmd, "TESTCAM") != NULL || strstr(ascii_cmd, "DUMMYCAM") != NULL || strcmp(ascii_cmd, "TC") == 0) {
                         static const uint8_t dummy_cmd[13] = {0x53, 0x04, 0xCC, 0x5E, 0xBE, 0, 0xD0, 0,0,0,0,0, 0x45};
                         uart1_puts("\r\n>>> [M0+ DOWNLINK] ASCII: DUMMY CAMERA TEST (69 CHUNKS from camera_dummy_image.h) <<<\r\n");
-                        Sat_Forward_Command_To_M4(dummy_cmd, 13);
                         Satellite_Send_Ack_Accepted(SAT_MISSION_CAM_RGB);
+                        Sat_Forward_Command_To_M4(dummy_cmd, 13);
                         {
                             uint32_t wait_start = HAL_GetTick();
                             while (flash_data_empty() &&
@@ -1320,6 +1343,7 @@ int main(void) {
                     }
                 }
 
+                Satellite_GMSK_Release();
                 s_cmd_service_active = false;
                 s_last_cmd_time_ms = 0; /* Clear hold delay so CW beacon resumes immediately */
 
