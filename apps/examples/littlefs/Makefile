@@ -30,6 +30,6 @@ MODULE = $(CONFIG_EXAMPLES_LITTLEFS)
 MAINSRC = littlefs_main_mount.c read_main.c erase_main.c
 CSRCS += $(APPDIR)/examples/OBC_main/ring_buffer.c
 
-CFLAGS += -I$(APPDIR)/examples/OBC_main
+CFLAGS += -I$(APPDIR)/examples/OBC_main -I$(TOPDIR)/../shareRAM/ipc
 
 include $(APPDIR)/Application.mk

@@ -232,7 +232,7 @@ void RadioApp_Send(
     modParams.Params.Gfsk.Bandwidth = SUBGRF_GetFskBandwidthRegValue(RADIO_RX_BANDWIDTH_HZ);
     SUBGRF_SetModulationParams(&modParams);
 
-    SUBGRF_SetTxParams(s_radio_pa_select, s_radio_tx_power_dbm, RADIO_RAMP_3400_US);
+    SUBGRF_SetTxParams(s_radio_pa_select, s_radio_tx_power_dbm, RADIO_RAMP_200_US);
 
     /* PA / RF switch already set by Satellite_GMSK_Prepare(). Do not write
      * REG_DRV_CTRL SMPS_MAX or SUBGRF_SetSwitch() here — that brown-outs 5V PA TX. */

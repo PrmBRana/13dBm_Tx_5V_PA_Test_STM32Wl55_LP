@@ -263,6 +263,8 @@ void RadioApp_Send(
     SUBGRF_SetPaConfig(0x04, 0x07, 0x00, 0x01);
     SUBGRF_SetTxParams(RFO_HP, s_radio_tx_power_dbm, RADIO_RAMP_200_US);
     SUBGRF_WriteRegister(REG_DRV_CTRL, 0x7 << 1);
+    SUBGRF_WriteRegister(REG_OCP, 0x38); /* 160 mA current limit for RFO_HP +22 dBm */
+    SUBGRF_WriteRegister(REG_TX_CLAMP, SUBGRF_ReadRegister(REG_TX_CLAMP) | (0x0F << 1));
 
     /* 6. Set RF switch to TX */
     SUBGRF_SetSwitch(RFO_HP, RFSWITCH_TX);
@@ -326,7 +328,7 @@ void RadioApp_ForceOpenGfskParams(void)
         RADIO_PREAMBLE_LENGTH_BITS;
 
     packetParams.Params.Gfsk.PreambleMinDetect =
-        RADIO_PREAMBLE_DETECTOR_16_BITS;
+        RADIO_PREAMBLE_DETECTOR_08_BITS;
 
     packetParams.Params.Gfsk.SyncWordLength =
         RADIO_DOWNLINK_SYNC_WORD_BITS;

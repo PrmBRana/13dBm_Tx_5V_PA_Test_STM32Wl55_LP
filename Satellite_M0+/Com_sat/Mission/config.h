@@ -48,30 +48,29 @@ extern "C" {
  */
 /*
  * CW Morse drive (dBm) on RFO_LP into the 3.3V PA (PC2).
- * The 3.3V path is current-clamped (REG_OCP = 0x18). Do not use this value
- * for GMSK: that path turns the 5V boost and 5V PA on.
+ * Standard +14 dBm with paDutyCycle 0x04 produces +26 dBm at the antenna.
+ * The 3.3V PA does not load the 5V DC/DC boost and operates cleanly without brownout.
  */
 #define RADIO_TX_POWER_DBM             14
 
 /*
  * GMSK ACK and data downlink drive into the 5V PA (PC3 + PA0 boost).
- * +14 dBm internal drive with paDutyCycle 0x04 produces +27 dBm (500 mW)
- * at the antenna. Supported by external power supply (>= 1.5A).
+ * +13 dBm drive with paDutyCycle 0x03 is the verified maximum safe operating
+ * drive without brownout reset (14 dBm / duty 0x04 causes 3.3V rail sag and MCU reset).
  */
-#define RADIO_GMSK_TX_POWER_DBM        14
+#define RADIO_GMSK_TX_POWER_DBM        13
 
 /* 5V LP power-up: settle the 5V DC/DC (PA0) before the 5V PA (PC3) is
- * enabled, and bias the 5V PA before the RF switch goes to TX. */
-#define SAT_5V_DCDC_SETTLE_MS          30
-#define SAT_5V_PA_BIAS_MS              10
+ * enabled, and bias the 5V PA before the RF switch goes to TX.
+ * 60 ms DC/DC settle ensures boost capacitors are fully charged before PA load. */
+#define SAT_5V_DCDC_SETTLE_MS          60
+#define SAT_5V_PA_BIAS_MS              15
 
 /*
- * SX126x RFO_LP paDutyCycle used at +14 dBm GMSK drive.
- * At 10 dBm the driver selects duty 0x02 instead.
- * Keep the 5V PA biased for the whole GMSK burst (no PC3 off / PC2 on between
- * packets) so a later power increase does not cause an inrush brownout.
+ * SX126x RFO_LP paDutyCycle used for 5V PA GMSK drive.
+ * 0x03 provides safe +13 dBm drive and eliminates DC/DC inrush brownouts.
  */
-#define RADIO_GMSK_5V_PA_DUTY          0x04
+#define RADIO_GMSK_5V_PA_DUTY          0x03
 
 /*
  * External Power Amplifier mapping (fixed by hardware, both fed from RFO_LP / PB2):

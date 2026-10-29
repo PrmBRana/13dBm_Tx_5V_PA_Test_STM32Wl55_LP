@@ -1,5 +1,6 @@
 #include "cw_rx.h"
 #include <string.h>
+#include <stdio.h>
 
 /* Same character set as the satellite keyer (Get_Morse_Code in satellite_app.c) */
 static const struct { const char *code; char ch; } k_morse[] =
@@ -55,6 +56,50 @@ static const char *call_end(void)
     return NULL;
 }
 
+/* Check if all tokens of CW1 (Voltages & Temperatures) have been received.
+ * Format: "<callsign> <v1>V <v2>V <t1>C <t2>C <t3>C"
+ * Requires at least 2 voltages ('V') and 3 temperatures ('C'). */
+static bool is_cw1_complete(const char *str)
+{
+    if (!str) return false;
+    int v_count = 0;
+    int c_count = 0;
+    const char *p = str;
+    while (*p)
+    {
+        if (*p == 'V' || *p == 'v') v_count++;
+        else if (*p == 'C' || *p == 'c') c_count++;
+        p++;
+    }
+    return (v_count >= 2 && c_count >= 3);
+}
+
+/* Check if all tokens of CW2 (Currents & Status Flags) have been received.
+ * Format: "<callsign> <a1>A <a2>A <a3>A <f1> <f2>"
+ * Requires at least 3 currents ('A') and 2 status flag integers. */
+static bool is_cw2_complete(const char *str)
+{
+    if (!str) return false;
+    int a_count = 0;
+    const char *last_a = NULL;
+    const char *p = str;
+    while (*p)
+    {
+        if (*p == 'A' || *p == 'a') {
+            a_count++;
+            last_a = p;
+        }
+        p++;
+    }
+    if (a_count < 3 || !last_a) return false;
+
+    int f1 = 0, f2 = 0;
+    if (sscanf(last_a + 1, "%d %d", &f1, &f2) == 2) {
+        return true;
+    }
+    return false;
+}
+
 static void line_flush(void)
 {
     while (s_line_len > 0 && s_line[s_line_len - 1] == ' ') s_line_len--;
@@ -99,20 +144,19 @@ static void finish_char(void)
 
 static void segment_break(void)
 {
-    /* Satellite: CALLSIGN <1.0 s> MESSAGE <1.5 s or more> CALLSIGN ...
-     * - callsign present, nothing after it yet -> keep line open (message follows)
-     * - callsign present and payload already there -> message finished, flush
-     * - no callsign -> junk / standalone, flush                                */
-    const char *e = call_end();
-    if (e != NULL)
-    {
-        while (*e == ' ') e++;
-        if (*e == '\0') line_add(' ');
-        else            line_flush();
-    }
-    else
+    /* If CW1 or CW2 is fully received, the beacon message is complete -> flush now */
+    if (is_cw1_complete(s_line) || is_cw2_complete(s_line))
     {
         line_flush();
+        return;
+    }
+
+    /* DO NOT ERASE until all CW1 (or CW2) is received!
+     * Keep the buffer open across inter-word and inter-token gaps.
+     * Ensure single space separation between words. */
+    if (s_line_len > 0 && s_line[s_line_len - 1] != ' ')
+    {
+        line_add(' ');
     }
 }
 
@@ -174,6 +218,8 @@ static void mark_ended(uint32_t t)
     {
         emit(CW_EVT_CARRIER, 0, 0, m, (int16_t)(s_pk16 / 16));
         s_sym_len = 0;
+        s_line_len = 0;
+        s_line[0] = '\0';
         return;
     }
 
@@ -198,6 +244,13 @@ static void space_timers(uint32_t t)
     {
         s_word_done = true;
         line_add(' ');
+        /* If all tokens of CW1 or CW2 have been received, flush without waiting */
+        if (is_cw1_complete(s_line) || is_cw2_complete(s_line))
+        {
+            line_flush();
+            s_seg_done = true;
+            return;
+        }
     }
     if (!s_seg_done && g >= CW_SEG_GAP_MS)
     {

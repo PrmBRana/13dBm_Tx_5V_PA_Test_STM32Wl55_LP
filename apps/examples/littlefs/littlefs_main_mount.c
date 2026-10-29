@@ -53,6 +53,7 @@
 
 #include <nuttx/spi/spi.h>
 #include <telemetry_rb.h>
+#include "Sring_buffer.h"
 
 /****************************************************************************
  * Pre-processor Definitions
@@ -920,6 +921,12 @@ static int littlefs_telemetry_daemon(void)
     {
       /* 3. Sleep until notified by OBC_main (0% CPU while waiting) */
       sem_wait(&g_telemetry_sem);
+
+      /* Hold off flash writes if M0+ is actively downlinking to prevent power spikes */
+      while (sat_is_downlink_active())
+        {
+          usleep(100000);
+        }
 
       /* 4. Pop all pending packets from the ring buffer */
       while (telemetry_rb_read(&env) == 0)

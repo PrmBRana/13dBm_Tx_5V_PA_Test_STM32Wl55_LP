@@ -477,8 +477,7 @@ static bool Radio_Send_And_Wait(uint8_t *buffer, uint16_t size, uint32_t timeout
     const bool pa5v_on =
         (HAL_GPIO_ReadPin(AMP_5V_EN_PORT, AMP_5V_EN_PIN) == GPIO_PIN_SET) &&
         (HAL_GPIO_ReadPin(DCDC_5V_EN_PORT, DCDC_5V_EN_PIN) == GPIO_PIN_SET);
-    const bool pa3v3_on = (HAL_GPIO_ReadPin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN) == GPIO_PIN_SET);
-    if (!pa5v_on && !pa3v3_on) {
+    if (!pa5v_on) {
         Satellite_GMSK_Prepare();
     }
     tx_busy = 1;
@@ -497,6 +496,7 @@ static bool Radio_Send_And_Wait(uint8_t *buffer, uint16_t size, uint32_t timeout
             }
             return false;
         }
+        CPU2_Delay_Ms(1);
     }
     CPU2_Delay_Ms(2);
     if (Satellite_GetDCDCHold()) {

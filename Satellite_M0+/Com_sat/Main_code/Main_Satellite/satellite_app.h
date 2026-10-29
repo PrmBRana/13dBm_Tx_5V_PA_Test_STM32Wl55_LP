@@ -38,7 +38,7 @@ extern "C" {
  *   connected to the external PA front-end:
  */
 #define SAT_CFG_DEFAULT_RF_SWITCH          RBI_SWITCH_RFO_LP   /* CW: RFO_LP (PB2) -> 3.3V PA (PC2) */
-#define SAT_CFG_DEFAULT_RF_SWITCH_5V       RBI_SWITCH_RFO_LP   /* GMSK: Safe 3.3V PA (PC2) mode (prevents brownout reset on bench/USB power). Set to RBI_SWITCH_RFO_LP5V for 5V PA flight boost */
+#define SAT_CFG_DEFAULT_RF_SWITCH_5V       RBI_SWITCH_RFO_LP5V /* GMSK: RFO_LP (PB2) -> 5V PA (PC3) + 5V DC/DC (PA0) */
 
 /* CPU2 (Cortex-M0+) Vector Table Base Address in Flash */
 #define SATELLITE_CPU2_VECTOR_TABLE_ADDR   0x08032000UL

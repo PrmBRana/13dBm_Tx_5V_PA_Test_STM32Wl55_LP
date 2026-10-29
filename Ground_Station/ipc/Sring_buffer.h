@@ -93,6 +93,39 @@ struct shared_ring_rx
   ((volatile struct shared_ring_rx *)IPC_RING_RX_BASE)
 
 /* ------------------------------------------------------------
+ * Shared Satellite Status (M0+ <-> M4)
+ * Located at 0x20008200 in shared SRAM2
+ * ------------------------------------------------------------ */
+#define IPC_SHARED_STATUS_BASE 0x20008200UL
+#define SHARED_STATUS_MAGIC    0x53544154UL /* "STAT" */
+
+struct shared_status_s
+{
+  volatile uint32_t magic;
+  volatile uint32_t downlink_active; /* 1 = M0+ RF TX active; M4 pauses heavy workload */
+  volatile uint32_t m4_paused;       /* 1 = M4 confirmed paused */
+};
+
+#define SHARED_STATUS \
+  ((volatile struct shared_status_s *)IPC_SHARED_STATUS_BASE)
+
+static inline void sat_set_downlink_active(bool active)
+{
+  SHARED_STATUS->magic = SHARED_STATUS_MAGIC;
+  SHARED_STATUS->downlink_active = active ? 1U : 0U;
+  __asm__ volatile ("dmb" ::: "memory");
+}
+
+static inline bool sat_is_downlink_active(void)
+{
+  if (SHARED_STATUS->magic == SHARED_STATUS_MAGIC)
+    {
+      return (SHARED_STATUS->downlink_active != 0U);
+    }
+  return false;
+}
+
+/* ------------------------------------------------------------
  * IPCC doorbells
  * ------------------------------------------------------------ */
 #ifndef IPCC_BASE

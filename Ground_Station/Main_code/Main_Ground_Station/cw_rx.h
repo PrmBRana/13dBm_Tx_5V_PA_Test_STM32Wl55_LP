@@ -31,19 +31,19 @@ extern "C" {
 
 /* Classification thresholds (midpoints between nominal values) */
 #define CW_DAH_MIN_MS          (2U * CW_UNIT_DEFAULT_MS)     /* mark >= 160 -> dah     */
-#define CW_TUNE_MIN_MS         (5U * CW_UNIT_DEFAULT_MS)     /* mark >= 400 -> carrier */
-#define CW_MARK_WATCHDOG_MS    (20U * CW_UNIT_DEFAULT_MS)    /* 1600 ms: force mark-end if stuck in mark */
+#define CW_TUNE_MIN_MS         1200U   /* mark >= 1200 ms -> carrier tone (prevents Morse dahs from triggering carrier wipe) */
+#define CW_MARK_WATCHDOG_MS    3500U   /* 3500 ms: force mark-end if stuck in mark (allows full 2.0s tuning tone) */
 #define CW_CHAR_GAP_MS         (2U * CW_UNIT_DEFAULT_MS)     /* space >= 160 -> end of char */
 #define CW_WORD_GAP_MS         (5U * CW_UNIT_DEFAULT_MS)     /* space >= 400 -> word gap    */
 #define CW_SEG_GAP_MS          (10U * CW_UNIT_DEFAULT_MS)    /* space >= 800 -> segment gap */
 
 #define CW_MIN_SNR_DB          12      /* min (level - noise floor) for carrier */
 #define CW_NOISE_INIT_DBM      (-125)  /* initial noise floor estimate          */
-#define CW_LOST_HOLD_MS        500U    /* carrier "lost" after this much silence (was 3000, kept short to prevent stuck-mark) */
+#define CW_LOST_HOLD_MS        2000U   /* carrier "lost" after 2.0 s: bridges 560 ms word gaps and 1.0 s inter-string delay */
 #define CW_DEBOUNCE_SAMPLES    3U      /* edge must persist 3 samples (15 ms)   */
 #define CW_GLITCH_MS           40U     /* pulses < 40 ms ignored as noise spikes */
-#define CW_LINE_IDLE_MS        2500U   /* flush line after this much silence    */
-#define CW_LINE_MAX            96U
+#define CW_LINE_IDLE_MS        6000U   /* flush line only after 6.0 s of complete silence (beacon ended) */
+#define CW_LINE_MAX            128U
 #define CW_SYM_MAX             8U
 #define CW_CALLSIGN            "9NS2S2NEPAL"
 

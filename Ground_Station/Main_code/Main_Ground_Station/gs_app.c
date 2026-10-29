@@ -305,28 +305,37 @@ static void GS_CW_Event(CwEvt_t evt, char ch, const char *text,
         break;
 
     case CW_EVT_LINE:
-        /* full decoded line — parse telemetry if callsign present */
+        /* full decoded line — parse telemetry */
         uart2_puts("\r\n");
         uart2_printf("{\"type\":\"CWRX\",\"text\":\"%s\",\"callsign\":%u}\r\n",
                      text ? text : "", (unsigned)value);
         uart2_printf("[CW DECODED] %s\r\n", text ? text : "");
 
-        if (value && text) {
+        if (text) {
+            /* Locate start of payload after callsign if present */
+            const char *p = strstr(text, CW_CALLSIGN);
+            if (!p) p = strstr(text, "9NS2S2");
+            if (!p) p = strstr(text, "NEPAL");
+            if (p) {
+                while (*p && *p != ' ') p++; /* advance past callsign */
+            } else {
+                p = text;
+            }
+            while (*p == ' ') p++;
+
             /* Try to find voltage / current / temperature tokens */
             float v1 = 0, v2 = 0, a1 = 0, a2 = 0, a3 = 0;
             float t1 = 0, t2 = 0, t3 = 0;
-            int tokens = sscanf(text,
-                "%*s"           /* skip callsign */
-                " %fV %fV %fC %fC %fC",
+            int tokens = sscanf(p,
+                "%fV %fV %fC %fC %fC",
                 &v1, &v2, &t1, &t2, &t3);
             if (tokens == 5) {
                 uart2_printf(
                     "  [CW TLM-1] BatV=%.2fV SolV=%.2fV AntT=%.1fC BatT=%.1fC BPBT=%.1fC\r\n",
                     (double)v1, (double)v2, (double)t1, (double)t2, (double)t3);
             } else {
-                tokens = sscanf(text,
-                    "%*s"           /* skip callsign */
-                    " %fA %fA %fA %f %f",
+                tokens = sscanf(p,
+                    "%fA %fA %fA %f %f",
                     &a1, &a2, &a3, &v1, &v2);
                 if (tokens >= 3) {
                     uart2_printf(
@@ -336,6 +345,7 @@ static void GS_CW_Event(CwEvt_t evt, char ch, const char *text,
                 }
             }
         }
+        uart2_puts("  >>> [CW BEACON FINISHED] Satellite is now in 50s RX listen mode on 437.375 MHz. Send command NOW! <<<\r\n");
         break;
     }
     (void)ch;
@@ -1103,13 +1113,13 @@ bool GS_Send_Burst_Packet(const uint8_t *payload, uint16_t len, uint8_t burst_co
         while (tx_busy != 0 && cnt > 0) { CPU2_Delay_Ms(1); cnt--; }
 
         if (tx_busy != 0) {
-            uart2_puts("TX TIMEOUT\r\n");
+            uart2_puts("  !!! [TX FAILED] Timeout waiting for radio TxDone IRQ\r\n");
             stat_tx_timeouts++;
             GS_Radio_Idle();
             tx_busy = 0;
+        } else {
+            uart2_printf("  [%u/%u] Uplink packet sent OK\r\n", b + 1, burst_count);
         }
-
-        uart2_printf("  [%u/%u] Uplink packet sent OK\r\n", b + 1, burst_count);
         if (b + 1 < burst_count) CPU2_Delay_Ms(120);
     }
 

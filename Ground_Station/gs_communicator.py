@@ -730,6 +730,7 @@ def run_gui(default_port=None, baudrate=115200, pa="HP"):
         "flash_history": [],
         "current_mission_type": "HK",
         "raw_g3ruh_acc": bytearray(),
+        "cw_accum": "",
     }
 
     auto_save_excel_var = tk.BooleanVar(value=True)
@@ -2487,6 +2488,24 @@ def run_gui(default_port=None, baudrate=115200, pa="HP"):
         if key in hk_vars:
             hk_vars[key][0].set(val_str)
 
+    def _is_cw_beacon_complete(txt):
+        if not txt:
+            return False
+        clean = txt.strip()
+        tokens = clean.split()
+        v_count = sum(1 for tok in tokens if 'V' in tok or 'v' in tok)
+        c_count = sum(1 for tok in tokens if 'C' in tok or 'c' in tok)
+        a_count = sum(1 for tok in tokens if 'A' in tok or 'a' in tok)
+        # CW1 has 2 voltages ('V') and 3 temperatures ('C') (e.g. 9NS2S2NEPAL 3.85V 4.20V 22.5C 24.0C 23.1C)
+        if v_count >= 2 and c_count >= 3:
+            return True
+        # CW2 has 3 currents ('A') and 2 status numbers (e.g. 9NS2S2NEPAL 0.15A 0.35A 0.20A 1 0)
+        if a_count >= 3 and len(tokens) >= 5:
+            return True
+        if len(tokens) >= 6 and any(call in clean for call in (SAT_CALLSIGN, "9NS2S2", "NEPAL")):
+            return True
+        return False
+
     def handle_hk_telemetry(obj):
         state["packets_rx"] += 1
         seq = obj.get("seq", 0)
@@ -2825,9 +2844,19 @@ def run_gui(default_port=None, baudrate=115200, pa="HP"):
                     append_log(raw, "rx")
                     return
                 elif t == "CWRX":
-                    txt = obj.get("text", "")
-                    update_cw_panel(state_txt="DECODED", live=txt, last=txt, color="#15803D")
+                    txt = obj.get("text", "").strip()
                     append_log(raw, "ack")
+                    if _is_cw_beacon_complete(txt):
+                        state["cw_accum"] = txt
+                        update_cw_panel(state_txt="DECODED", live=txt, last=txt, color="#15803D")
+                    else:
+                        if len(txt) > len(state.get("cw_accum", "")):
+                            state["cw_accum"] = txt
+                        live_txt = state.get("cw_accum", "") or txt
+                        cur_last = cw_last_var.get()
+                        should_set_last = cur_last in ("—", "", "(waiting for Morse)")
+                        update_cw_panel(state_txt="RECEIVING", live=live_txt[-120:],
+                                        last=(txt if should_set_last else None), color="#B45309")
                     return
                 elif t == "CWSIG":
                     on = obj.get("on", 0)
@@ -2839,16 +2868,28 @@ def run_gui(default_port=None, baudrate=115200, pa="HP"):
                 elif t == "CWCAR":
                     rssi = obj.get("rssi", None)
                     ms = obj.get("ms", 0)
-                    update_cw_panel(state_txt="CARRIER", rssi=rssi,
-                                    live=f"Tuning tone {ms} ms", color="#15803D")
+                    # When a tuning carrier tone is emitted, do NOT erase the accumulated text or LAST
+                    if _is_cw_beacon_complete(state.get("cw_accum", "")):
+                        cw_last_var.set(state["cw_accum"])
+                    update_cw_panel(state_txt="CARRIER", rssi=rssi, color="#15803D")
                     append_log(raw, "info")
                     return
                 elif t == "CWCHAR":
                     ch = obj.get("ch", "")
-                    cur = cw_live_var.get()
-                    if cur.startswith("("):
+                    cur = state.get("cw_accum", "")
+                    # If previous accumulation was already complete, preserve it in LAST and start fresh
+                    if _is_cw_beacon_complete(cur):
+                        cw_last_var.set(cur)
                         cur = ""
-                    update_cw_panel(state_txt="KEYING", live=(cur + ch)[-48:], color="#B45309")
+                    cur_live = cw_live_var.get()
+                    if cur_live.startswith("[") or cur_live.startswith("(") or "waiting" in cur_live:
+                        cur = ""
+                    if ch == " " and (not cur or cur.endswith(" ")):
+                        pass
+                    else:
+                        cur += ch
+                    state["cw_accum"] = cur
+                    update_cw_panel(state_txt="KEYING", live=cur[-120:], color="#B45309")
                     return
                 elif t == "WF":
                     # Waterfall samples: skip logging (too spammy)
@@ -2968,7 +3009,17 @@ def run_gui(default_port=None, baudrate=115200, pa="HP"):
 
         if "[CW DECODED]" in line:
             txt = line.split("[CW DECODED]", 1)[-1].strip()
-            update_cw_panel(state_txt="DECODED", live=txt, last=txt, color="#15803D")
+            if _is_cw_beacon_complete(txt):
+                state["cw_accum"] = txt
+                update_cw_panel(state_txt="DECODED", live=txt, last=txt, color="#15803D")
+            else:
+                if len(txt) > len(state.get("cw_accum", "")):
+                    state["cw_accum"] = txt
+                live_txt = state.get("cw_accum", "") or txt
+                cur_last = cw_last_var.get()
+                should_set_last = cur_last in ("—", "", "(waiting for Morse)")
+                update_cw_panel(state_txt="RECEIVING", live=live_txt[-120:],
+                                last=(txt if should_set_last else None), color="#B45309")
             append_log(raw, "ack")
             return
         if "[CW] Carrier detected" in line:
@@ -2981,9 +3032,37 @@ def run_gui(default_port=None, baudrate=115200, pa="HP"):
             m = re.search(r"(\d+)\s+ms.*RSSI\s+(-?\d+)", line)
             ms = int(m.group(1)) if m else 0
             rssi = int(m.group(2)) if m else None
-            update_cw_panel(state_txt="CARRIER", rssi=rssi,
-                            live=f"Tuning tone {ms} ms", color="#15803D")
+            if _is_cw_beacon_complete(state.get("cw_accum", "")):
+                cw_last_var.set(state["cw_accum"])
+            update_cw_panel(state_txt="CARRIER", rssi=rssi, color="#15803D")
             append_log(raw, "info")
+            return
+        if "[CW TLM-1]" in line:
+            # Format: [CW TLM-1] BatV=3.85V SolV=4.20V AntT=22.5C BatT=24.0C BPBT=23.1C
+            m_batv = re.search(r"BatV=([\d\.\-]+)V", line)
+            m_solv = re.search(r"SolV=([\d\.\-]+)V", line)
+            m_antt = re.search(r"AntT=([\d\.\-]+)C", line)
+            m_batt = re.search(r"BatT=([\d\.\-]+)C", line)
+            m_bpbt = re.search(r"BPBT=([\d\.\-]+)C", line)
+            if m_batv: _set_hk_card("vbat", f"{m_batv.group(1)} V")
+            if m_solv: _set_hk_card("vsol", f"{m_solv.group(1)} V")
+            if m_antt: _set_hk_card("t_ant", f"{m_antt.group(1)} °C")
+            if m_batt: _set_hk_card("t_bat", f"{m_batt.group(1)} °C")
+            if m_bpbt: _set_hk_card("t_bpb", f"{m_bpbt.group(1)} °C")
+            cur_time = time.strftime('%H:%M:%S')
+            hk_meta_var.set(f"Last CW Telemetry Sync: {cur_time} | CW1 Battery & Temps DECODED")
+            append_log(raw, "ack")
+            return
+        if "[CW TLM-2]" in line:
+            # Format: [CW TLM-2] 3V3I=0.12A SolI=0.35A BatI=-0.05A F1=1 F2=0
+            m_3v3i = re.search(r"3V3I=([\d\.\-]+)A", line)
+            m_soli = re.search(r"SolI=([\d\.\-]+)A", line)
+            m_bati = re.search(r"BatI=([\d\.\-]+)A", line)
+            if m_3v3i: _set_hk_card("i_3v3", f"{m_3v3i.group(1)} A")
+            if m_bati: _set_hk_card("i_bat", f"{m_bati.group(1)} A")
+            cur_time = time.strftime('%H:%M:%S')
+            hk_meta_var.set(f"Last CW Telemetry Sync: {cur_time} | CW2 Currents DECODED")
+            append_log(raw, "ack")
             return
 
         # Text lines

@@ -339,6 +339,12 @@ static void *telemetry_thread(void *arg)
 
   while (1)
     {
+      /* Pause telemetry acquisition while M0+ is actively downlinking to prevent 3.3V rail brownout */
+      while (sat_is_downlink_active())
+        {
+          usleep(100000); /* 100 ms yield */
+        }
+
       /* 1. Perform telemetry acquisition and update live buffer FIRST */
       perform_telemetry_cycle();
 
@@ -2049,6 +2055,8 @@ static void process_ground_commands(void)
             printf("\n[OBC_MAIN] ============================================================\n");
             printf("[OBC_MAIN] >>> STREAM DUMMY CAMERA DATA (FROM MEMORY/FILE): 69 CHUNKS x 128 B <<<\n");
             printf("[OBC_MAIN] ============================================================\n");
+            /* Send initial ACK to M0+ indicating data downlink command accepted */
+            ipcc_m4_send(IPCC_CH_FLASH);
             stream_dummy_camera_to_m0plus(0, 69); /* All 69 chunks from camera_dummy_image.h */
             ipcc_m4_send(IPCC_CH_COMMAND); /* Notify M0+ streaming complete */
           }
@@ -2068,6 +2076,8 @@ static void process_ground_commands(void)
             uint16_t cam_pkts = ((uint16_t)rx_cmd.cmd[11] <<  8) | rx_cmd.cmd[12];
             printf("[OBC_MAIN] Detected Verified CAMERA DOWNLOAD Command: addr=0x%08lX pkts=%u -> Streaming stored photo chunks from flash to M0+\n",
                    (unsigned long)cam_addr, cam_pkts);
+            /* Send initial ACK to M0+ indicating data downlink command accepted */
+            ipcc_m4_send(IPCC_CH_FLASH);
             stream_real_camera_from_flash(cam_addr, cam_pkts);
             ipcc_m4_send(IPCC_CH_COMMAND); /* Notify M0+ streaming complete */
           }
@@ -2121,6 +2131,8 @@ static void process_ground_commands(void)
                     pthread_mutex_unlock(&g_beacon_mutex);
                   }
 
+                /* Send initial ACK to M0+ indicating data downlink command accepted */
+                ipcc_m4_send(IPCC_CH_FLASH);
                 stream_hk_from_flash(addr, num_pkts);
                 printf("[OBC_MAIN] %s chunks completed -> Notifying M0+ via IPCC\n", cmd_type_str);
                 ipcc_m4_send(IPCC_CH_COMMAND);

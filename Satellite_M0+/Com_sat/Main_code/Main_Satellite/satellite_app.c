@@ -326,8 +326,7 @@ static void Satellite_Log_PaPins(const char *tag)
 }
 
 void Satellite_CW_Prepare(void) {
-    int8_t power = (s_config.txPowerDbm != 0) ? s_config.txPowerDbm : RADIO_TX_POWER_DBM;
-    if (power > 14) power = 14;
+    int8_t power = RADIO_TX_POWER_DBM;
     uint8_t pa_sel = RFO_LP;
 
     /* A leftover GMSK hold would make SUBGRF_SetSwitch() take the 5V path. */
@@ -353,18 +352,17 @@ void Satellite_CW_Prepare(void) {
     SUBGRF_SetRfFrequency(s_config.radio.txFrequency);
     SUBGRF_SetPaConfig(0x04, 0x00, 0x01, 0x01); /* RFO_LP PA configuration (deviceSel=0x01, hpMax=0x00) */
     SUBGRF_SetTxParams(pa_sel, power, RADIO_RAMP_200_US); /* soft ramp: smaller supply current step */
-    SUBGRF_WriteRegister(REG_OCP, 0x18); /* 60 mA current clamp: prevents 3.3V rail collapse & MCU brownout */
+    SUBGRF_WriteRegister(REG_OCP, 0x38); /* 160 mA max current limit for full 14 dBm RF saturation */
     SUBGRF_WriteRegister(REG_DRV_CTRL, 0x7 << 1);
     SUBGRF_SetSwitch(pa_sel, RFSWITCH_TX);
     Satellite_Log_PaPins("CW");
 }
 
 void Satellite_CW_CarrierOn(void) {
-    int8_t power = (s_config.txPowerDbm != 0) ? s_config.txPowerDbm : RADIO_TX_POWER_DBM;
-    if (power > 14) power = 14;
+    int8_t power = RADIO_TX_POWER_DBM;
     SUBGRF_SetPaConfig(0x04, 0x00, 0x01, 0x01); /* RFO_LP (+14 dBm) */
     SUBGRF_SetTxParams(RFO_LP, power, RADIO_RAMP_200_US); /* soft ramp: smaller supply current step */
-    SUBGRF_WriteRegister(REG_OCP, 0x18);
+    SUBGRF_WriteRegister(REG_OCP, 0x38);
     SUBGRF_WriteRegister(REG_DRV_CTRL, 0x7 << 1);
     SUBGRF_SetSwitch(RFO_LP, RFSWITCH_TX);
     SUBGRF_SetTxContinuousWave();
@@ -440,27 +438,32 @@ void Satellite_Hold_Continuous_Carrier_5V(uint32_t seconds) {
     uart1_puts(" Eliminates GMSK modulation spreading to verify true 27 dBm saturation\r\n");
     uart1_puts("============================================================\r\n");
 
-    int8_t power = (s_config.txPowerDbm != 0) ? s_config.txPowerDbm : RADIO_TX_POWER_DBM;
-    if (power > 14) power = 14;
+    int8_t power = RADIO_GMSK_TX_POWER_DBM;
+    if (power > 13) power = 13;
     uint8_t pa_sel = RFO_LP;
-    Radio.Standby();
+    SUBGRF_SetStandby(STDBY_XOSC);
 
-    /* 1. Enable 5V DC/DC Converter (PA0 = 1); PC2 is stopped after PC3 in step 2 */
+    /* 1. Ensure 3.3V PA is OFF, then Enable 5V DC/DC Converter (PA0 = 1) and settle */
+    HAL_GPIO_WritePin(AMP_3V3_EN_PORT, AMP_3V3_EN_PIN, GPIO_PIN_RESET);
+    CPU2_Delay_Ms(5);
     RBI_Enable5VDCDC(1);
-    CPU2_Delay_Ms(10); /* 10 ms soft-start settle delay for 5V boost capacitor charging */
+    CPU2_Delay_Ms(SAT_5V_DCDC_SETTLE_MS);
 
-    /* 3. Configure RF switch and assert 5V External PA (PC3 = 1) */
+    /* 2. Enable 5V External PA (PC3 = 1) and bias */
+    HAL_GPIO_WritePin(AMP_5V_EN_PORT, AMP_5V_EN_PIN, GPIO_PIN_SET);
+    CPU2_Delay_Ms(SAT_5V_PA_BIAS_MS);
+
+    /* 3. Configure RF switch for 5V PA path */
     RBI_SetTxSwitchConfig(RBI_SWITCH_RFO_LP5V);
     Satellite_SetRFSwitch(RBI_SWITCH_RFO_LP5V);
-    CPU2_Delay_Ms(2);  /* 2 ms PA bias settle delay */
+    CPU2_Delay_Ms(40);
 
-    SUBGRF_SetStandby(STDBY_RC);
     SUBGRF_SetDioIrqParams(IRQ_RADIO_NONE, IRQ_RADIO_NONE, IRQ_RADIO_NONE, IRQ_RADIO_NONE);
     SUBGRF_ClearIrqStatus(IRQ_RADIO_ALL);
     SUBGRF_SetPacketType(PACKET_TYPE_GFSK);
     SUBGRF_SetRfFrequency(s_config.radio.txFrequency);
-    SUBGRF_SetPaConfig(0x04, 0x00, 0x01, 0x01); /* RFO_LP */
-    SUBGRF_SetTxParams(pa_sel, power, RADIO_RAMP_40_US);
+    SUBGRF_SetPaConfig(RADIO_GMSK_5V_PA_DUTY, 0x00, 0x01, 0x01);
+    SUBGRF_SetTxParams(pa_sel, power, RADIO_RAMP_200_US);
     SUBGRF_WriteRegister(REG_OCP, 0x38);
     SUBGRF_WriteRegister(REG_DRV_CTRL, 0x7 << 1);
     SUBGRF_SetSwitch(pa_sel, RFSWITCH_TX);
@@ -892,7 +895,8 @@ void Satellite_GMSK_Prepare(void) {
         /* Already biased for this downlink session: do not re-toggle switch/PA. */
         if (pa5v_already_on) {
             RBI_SetTxSwitchConfig(RBI_SWITCH_RFO_LP5V);
-            SUBGRF_WriteRegister(REG_OCP, 0x18);
+            SUBGRF_SetPaConfig(RADIO_GMSK_5V_PA_DUTY, 0x00, 0x01, 0x01);
+            SUBGRF_WriteRegister(REG_OCP, 0x38);
             RadioApp_SetTxPower(RADIO_GMSK_TX_POWER_DBM);
             RadioApp_SetPaSelect(pa_sel);
             return;
@@ -918,7 +922,8 @@ void Satellite_GMSK_Prepare(void) {
         Satellite_SetRFSwitch(RBI_SWITCH_RFO_LP5V);
         CPU2_Delay_Ms(40);
 
-        SUBGRF_WriteRegister(REG_OCP, 0x18); /* 60 mA current clamp: prevents 3.3V rail collapse & MCU brownout */
+        SUBGRF_SetPaConfig(RADIO_GMSK_5V_PA_DUTY, 0x00, 0x01, 0x01);
+        SUBGRF_WriteRegister(REG_OCP, 0x38);
         uart1_puts("[GMSK] 5V PA ON\r\n");
     } else {
         const bool pa3v3_already_on =
@@ -928,7 +933,7 @@ void Satellite_GMSK_Prepare(void) {
 
         if (pa3v3_already_on) {
             RBI_SetTxSwitchConfig(RBI_SWITCH_RFO_LP);
-            SUBGRF_WriteRegister(REG_OCP, 0x18);
+            SUBGRF_WriteRegister(REG_OCP, 0x38);
             RadioApp_SetTxPower(RADIO_TX_POWER_DBM);
             RadioApp_SetPaSelect(pa_sel);
             return;
@@ -946,7 +951,7 @@ void Satellite_GMSK_Prepare(void) {
         Satellite_SetRFSwitch(RBI_SWITCH_RFO_LP);
         CPU2_Delay_Ms(5);
 
-        SUBGRF_WriteRegister(REG_OCP, 0x18); /* 60 mA current clamp: prevents 3.3V rail collapse & MCU brownout */
+        SUBGRF_WriteRegister(REG_OCP, 0x38);
         uart1_puts("[GMSK] 3.3V Safe Mode ON\r\n");
     }
     Satellite_Log_PaPins("GMSK");

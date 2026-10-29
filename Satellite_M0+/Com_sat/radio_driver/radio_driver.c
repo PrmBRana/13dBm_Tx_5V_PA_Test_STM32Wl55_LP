@@ -633,43 +633,48 @@ void SUBGRF_SetTxParams( uint8_t paSelect, int8_t power, RadioRampTimes_t rampTi
         {
           power = max_power;
         }
-        if (power >= 14)
+        if (RBI_GetTxSwitchConfig() == RBI_SWITCH_RFO_LP5V)
         {
-            if (RBI_GetTxSwitchConfig() == RBI_SWITCH_RFO_LP5V)
+            /* 5V External PA Mode (PC3 + PA0 Boost for GMSK):
+             * Configured in config.h (RADIO_GMSK_TX_POWER_DBM = 13, RADIO_GMSK_5V_PA_DUTY = 0x03).
+             * Verified safe ceiling is +13 dBm (paDutyCycle=0x03).
+             * Levels >= 14 dBm (duty 0x04) pull excessive 5V boost inrush and brown out the MCU. */
+            if (power >= 13)
             {
-                /* 5V External PA Mode (PC3 + PA0 Boost): drive set in config.h */
-                SUBGRF_SetPaConfig(RADIO_GMSK_5V_PA_DUTY, 0x00, 0x01, 0x01);
-                power = 0x0E;
+                SUBGRF_SetPaConfig(0x03, 0x00, 0x01, 0x01);
+                power = 0x0D; /* 13 dBm */
+            }
+            else if (power >= 12)
+            {
+                /* 12 dBm setting: paDutyCycle=0x03 */
+                SUBGRF_SetPaConfig(0x03, 0x00, 0x01, 0x01);
+                power = 0x0C;
+            }
+            else if (power >= 10)
+            {
+                SUBGRF_SetPaConfig(0x02, 0x00, 0x01, 0x01);
+                power = 0x0E - (14 - power);
             }
             else
             {
-                /* 3.3V External PA Mode (PC2 / SO2):
-                 * Standard +14 dBm setting (paDutyCycle=0x04, txPwr=0x0E). */
-                SUBGRF_SetPaConfig(0x04, 0x00, 0x01, 0x01);
-                power = 0x0E;
+                SUBGRF_SetPaConfig(0x01, 0x00, 0x01, 0x01);
+                power = 0x0D - (10 - power);
             }
-        }
-        else if (power >= 12)
-        {
-            /* Optimal +12 to +13 dBm setting: paDutyCycle=0x03, txPwr=0x0C/0x0D (softer drive, eliminates USB brownouts) */
-            SUBGRF_SetPaConfig(0x03, 0x00, 0x01, 0x01);
-            power = 0x0E - (14 - power);
-        }
-        else if (power >= 10)
-        {
-            SUBGRF_SetPaConfig(0x02, 0x00, 0x01, 0x01);
-            power = 0x0E - (14 - power);
         }
         else
         {
-            SUBGRF_SetPaConfig(0x01, 0x00, 0x01, 0x01);
-            power = 0x0D - (10 - power);
+            /* 3.3V External PA Mode (PC2 / SO2 for CW Morse Beacon):
+             * ALWAYS maintain full +14 dBm drive (paDutyCycle=0x04, txPwr=0x0E)
+             * to saturate the ADL5324 external amplifier for target +26 dBm output!
+             * The 3.3V PA does NOT use the 5V boost and never browns out at +14 dBm. */
+            SUBGRF_SetPaConfig(0x04, 0x00, 0x01, 0x01);
+            power = 0x0E;
         }
         if (power < -17)
         {
             power = -17;
         }
-        SUBGRF_WriteRegister(REG_OCP, 0x18);   /* 60 mA current limit: prevents 3.3V rail collapse & MCU brownout */
+        SUBGRF_WriteRegister(REG_OCP, 0x38);   /* 160 mA max current limit for full 14 dBm RF saturation */
     }
     else /* rfo_hp*/
     {
